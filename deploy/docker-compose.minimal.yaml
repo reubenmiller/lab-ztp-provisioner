@@ -1,0 +1,47 @@
+# Minimal single-service deployment of ztp-server.
+#
+# Reuses the same config, data dir, and profiles as the full stack
+# (docker-compose.yaml) so you can switch between them without losing the
+# server's identity (signing key, age key, SQLite DB all live under ./data).
+#
+# Differences from the full stack:
+#   - No Caddy. The server is published directly on the host as plain HTTP
+#     (the bundled config has no TLS block). Use on a trusted LAN, or put
+#     your own reverse proxy / ingress in front for TLS.
+#   - No SPA dev container. The operator UI is served from the assets
+#     baked into the server binary by `go:embed`. Run `just web-build`
+#     BEFORE the docker build, otherwise / serves the placeholder page.
+#     The /v1/* admin API is unaffected either way.
+#   - No demo devices, no mDNS sidecar.
+#
+# Usage:
+#   docker compose -f deploy/docker-compose.minimal.yaml up
+#
+# SPA + API:  http://localhost:${ZTP_HTTP_PORT:-8080}/
+
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: server
+    image: ztp-server:dev
+    container_name: ztp-server
+    restart: unless-stopped
+    ports:
+      - "${ZTP_HTTP_PORT:-8080}:8080"
+    volumes:
+      - ./data:/var/lib/ztp
+      - ./config/ztp-server.yaml:/etc/ztp/ztp-server.yaml:ro
+      - ./profiles.d:/etc/ztp/profiles.d:ro
+    environment:
+      - ZTP_LOG=debug
+      # Required. `just up` writes a random token to deploy/.env on first
+      # run; the server refuses to start without one.
+      - ZTP_ADMIN_TOKEN
+      - C8Y_BASEURL=${C8Y_BASEURL:-${C8Y_HOST:-${C8Y_URL:-}}}
+      - C8Y_TENANT=${C8Y_TENANT:-}
+      - C8Y_TOKEN=${C8Y_TOKEN:-}
+      - C8Y_USER=${C8Y_USER:-}
+      - C8Y_USERNAME=${C8Y_USERNAME:-}
+      - C8Y_PASSWORD=${C8Y_PASSWORD:-}

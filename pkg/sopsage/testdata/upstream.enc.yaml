@@ -1,0 +1,29 @@
+name: demo
+greeting: hello
+nested:
+    password: ENC[AES256_GCM,data:VUbDlAA5DQ==,iv:0FqF85DtphuQi7uYp5W+y96ZO0sDuePc4/bddx5vlJc=,tag:BX9wq8+khz5/VGDzQCondA==,type:str]
+    list:
+        - alpha
+        - beta
+flag: ENC[AES256_GCM,data:Ah7wUA==,iv:LCgyfXMBEKptHixeAGjC5LbzNqf3ozGNReiobpvtQEw=,tag:fMF+6n0jEslQkYmLMuFnLg==,type:bool]
+count: ENC[AES256_GCM,data:mWI=,iv:sGAzwkMjXxMp0PQvpRsA75Brctprfnufb5v067/g7+0=,tag:NobXtyXSvzeVjqW9XLJReQ==,type:int]
+sops:
+    kms: []
+    gcp_kms: []
+    azure_kv: []
+    hc_vault: []
+    age:
+        - recipient: age1rvtm0jy4pgnn9ydy2qcxzh85k82atyuspkwyxer4z37ru8dz3v3scv6kga
+          enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSAwZ0V0M0N3MGxRWCtzUmw3
+            c2JabytyTVRQN1l0RmVwMW9QbFBnQmZES1U0CjNEcU5IaGxYNlpNS1JsTlFNcmlw
+            Z0t0amVteCtGbThJZkg1K3c2cGhFSHMKLS0tIGR0U1J0RlhiVnZEOVV5VTF4bklK
+            NVpQSHVPenJMbmtmSTB6WkpqMmJ1SU0KdqwHsMFUdI2edadnz1QtqBwiptLSHosF
+            x8o7QfDcyVuO72w4TUu903z0CuDc98x/+Ixc8y5x8smp0AQZMn4N+A==
+            -----END AGE ENCRYPTED FILE-----
+    lastmodified: "2026-04-28T18:22:56Z"
+    mac: ENC[AES256_GCM,data:hIrwUvvygeK92L/GtuF/eVV1t5V8Tt1DQmNfxQB66Wxu8/+aHpRdUcGqIUNAQhSyoLvcP3OQPLSWvZPrKT7dMfgp4PlDWP6kYp8XihMHttvikah/QuIr1V6of059OQuTXzcEhzJ3tjPDNBCyk85RQ6rOBsdVZ/miJBfQ5AQtsmQ=,iv:vkPUkY2isFbLahHonwFOgCaagoQ/SCMp0aMoTtoWkz0=,tag:ITasx7/1LWbhOj51f2jpLQ==,type:str]
+    pgp: []
+    encrypted_regex: ^(password|count|flag)$
+    version: 3.7.3

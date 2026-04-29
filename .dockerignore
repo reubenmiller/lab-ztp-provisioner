@@ -1,0 +1,39 @@
+# Git history — not needed in build context
+.git/
+.gitignore
+
+# Pre-built host binaries (re-built inside Docker)
+bin/
+
+# Rust build artifacts — the Docker build doesn't use Rust;
+# excluding target/ prevents sending hundreds of MB to the daemon
+clients/rust/target/
+
+# Node / Svelte dev artifacts
+web/node_modules/
+web/build/
+web/.svelte-kit/
+web/.pnpm-store/
+
+# Local runtime state
+data/
+var/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Secrets / certs that should never leak into an image
+*.key
+*.pem
+identity.key
+deploy/certs/
+.env
+.env.local
+
+# macOS noise
+.DS_Store
+
+# Editor / IDE
+.vscode/
+.idea/

@@ -1,0 +1,70 @@
+# Caddy reverse proxy for ZTP — mkcert variant.
+#
+# Use this instead of Caddyfile when you want a browser-trusted certificate
+# on the local LAN (e.g. https://ztp.local:8443) without the self-signed
+# Caddy internal CA warning.
+#
+# Prerequisites:
+#   brew install mkcert
+#   just mkcert-setup          # generates deploy/certs/{cert,key}.pem and installs CA
+#
+# Then activate:
+#   echo "ZTP_CADDYFILE=./Caddyfile.mkcert" >> deploy/.env
+#   just down && just up -d
+#
+# The internal `ztp` block (used by demo device containers inside Docker) still
+# uses Caddy's internal CA — devices connect via the Docker network alias, not
+# the public hostname, so their CA mount is unaffected.
+
+{
+	auto_https disable_redirects
+	admin off
+	# No `default_sni` needed — the :443 catch-all block below handles all
+	# no-SNI (IP-based) connections automatically.
+}
+
+(ztp_routes) {
+	handle /v1/* {
+		reverse_proxy server:8080 {
+			header_up X-Real-IP {remote_host}
+		}
+	}
+	handle {
+		reverse_proxy web:5173 {
+			header_up X-Real-IP {remote_host}
+		}
+	}
+}
+
+# --- internal docker-network face -------------------------------------------
+# Demo devices reach Caddy at https://ztp via the Docker network alias.
+# Caddy's internal CA is used here so devices can verify TLS with the
+# mounted root.crt without needing the mkcert CA.
+ztp {
+	tls internal
+	import ztp_routes
+}
+
+# --- public-facing site + localhost fallback (mkcert cert) -------------------
+# :443 is a Caddy catch-all: it matches ANY connection on port 443 that does
+# NOT match a more specific site block (i.e. everything except the internal
+# `ztp` Docker-alias block above). This means:
+#   - https://ztp.local:8443/        — matched here (no dedicated block needed)
+#   - https://localhost:8443/        — matched here
+#   - https://127.0.0.1:8443/        — matched here (no SNI from IP connections)
+#   - https://192.168.x.y:8443/      — matched here
+# All of the above receive the mkcert cert.  `just mkcert-setup` generates the
+# cert with all detected LAN IPs + localhost + ztp.local in its SAN list, so
+# browsers accept it without a warning for any of those addresses.
+:443 {
+	tls /certs/cert.pem /certs/key.pem
+
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Strict-Transport-Security "max-age=63072000; includeSubDomains"
+	}
+
+	import ztp_routes
+}

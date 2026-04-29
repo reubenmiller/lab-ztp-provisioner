@@ -1,0 +1,70 @@
+# Example provisioning profile.
+#
+# This is the canonical "default" profile — the one used when no other
+# assignment matches. The schema mirrors the legacy top-level `payload:`
+# block; the only addition is the surrounding profile metadata
+# (name/description/labels/selector/priority).
+#
+# Secrets:
+#   - Use ${VAR} or ${VAR:-default} to pull values from the environment at
+#     load time. Missing required variables cause a hard load failure so
+#     misconfiguration is loud rather than silent.
+#   - For multi-secret rotation, encrypt this file with SOPS:
+#       sops -e -i default.yaml
+#     The server detects the `sops:` block and shells out to the local
+#     `sops` CLI to decrypt at load time. SOPS key material comes from the
+#     standard SOPS env vars (SOPS_AGE_KEY_FILE, SOPS_KMS_ARN, …); the
+#     server never sees plaintext key material.
+#   - GET /v1/admin/profiles/{name} redacts every field tagged sensitive
+#     (wifi password, c8y static_token, hook script, file contents, …) so
+#     admin UI screenshots and audit trails are safe to share.
+#
+# To pick up edits without restart: kill -HUP <ztp-server pid> or
+# POST /v1/admin/profiles/reload.
+
+name: default
+description: "Fallback profile used when no other assignment matches."
+
+# Optional: priority sets selector evaluation order (higher first). Equal
+# priorities tie-break on name. Default profiles typically have priority 0
+# so any selector-matched profile wins automatically.
+priority: 0
+
+# Optional: selector causes this profile to apply automatically to any
+# device whose facts match. Comment out to make this profile assignable
+# only via allowlist/token/operator-set override.
+# selector:
+#   match_model: "^rpi-"
+#   match_mac_oui:
+#     - "dc:a6:32"   # Raspberry Pi Trading
+#   match_hostname: "^lab-"
+
+payload:
+  ssh:
+    user: root
+    keys:
+      - "ssh-ed25519 AAAA... example@email.com"
+    github_users:
+      - reubenmiller
+
+  wifi:
+    networks:
+      - ssid: "${ZTP_WIFI_SSID:-FactoryNet}"
+        password: "${ZTP_WIFI_PASSWORD:-factory-pass}"
+        key_mgmt: "WPA-PSK"
+
+  cumulocity:
+    url: "https://example.cumulocity.com"
+    external_id_prefix: ""
+    token_ttl: "10m"
+    issuer:
+      mode: "local"
+      # base_url / tenant / credentials fall back to the standard go-c8y env
+      # vars (C8Y_BASEURL, C8Y_TENANT, C8Y_USER, C8Y_PASSWORD). For
+      # production, prefer issuer.mode "remote" with a sidecar.
+
+  files:
+    files:
+      - path: /etc/ztp/provisioned.marker
+        mode: "0644"
+        contents: "provisioned"

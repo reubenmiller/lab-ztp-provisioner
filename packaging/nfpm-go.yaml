@@ -1,0 +1,130 @@
+# nfpm configuration — ztp-agent (Go implementation)
+#
+# Build a .deb or .rpm for the Go-compiled ztp-agent binary.
+#
+# Required environment variables:
+#   VERSION    Package version  (e.g. 1.2.3  or  0.1.0~git.abc1234)
+#   NFPM_ARCH  Package architecture in nfpm/Debian notation:
+#                amd64 | arm64 | armhf
+#   BIN_ARCH   Suffix used in the cross-compiled binary filename:
+#                amd64 → bin/ztp-agent-linux-amd64
+#                arm64 → bin/ztp-agent-linux-arm64
+#                arm   → bin/ztp-agent-linux-arm   (armhf package)
+#
+# Typical invocations (from the just recipes):
+#   VERSION=1.0.0 NFPM_ARCH=amd64  BIN_ARCH=amd64  nfpm package -p deb -f packaging/nfpm-go.yaml
+#   VERSION=1.0.0 NFPM_ARCH=arm64  BIN_ARCH=arm64  nfpm package -p deb -f packaging/nfpm-go.yaml
+#   VERSION=1.0.0 NFPM_ARCH=armhf  BIN_ARCH=arm    nfpm package -p deb -f packaging/nfpm-go.yaml
+#
+# Install nfpm:
+#   brew install goreleaser/tap/nfpm
+#   # or
+#   go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+
+name:        "ztp-agent"
+arch:        "${NFPM_ARCH}"
+platform:    "linux"
+version:     "${VERSION}"
+section:     "admin"
+priority:    "optional"
+maintainer:  "thin-edge.io <info@thin-edge.io>"
+description: |
+  Zero-Touch Provisioning device agent (Go)
+
+  Enrolls this Linux device with a ZTP server, applies the returned
+  provisioning bundle (WiFi credentials, SSH keys, Cumulocity registration,
+  arbitrary files and hook scripts), and exits. On success the device is
+  fully provisioned; the unit will not run again until the provisioned
+  sentinel (/var/lib/ztp/provisioned) is removed.
+
+  Discovers the server automatically via mDNS on the local LAN by default.
+  Set ZTP_SERVER in /etc/default/ztp-agent to target a specific server URL.
+  Place the server's Ed25519 public key in /etc/ztp/server.pub to enable
+  strict trust anchoring.
+vendor:      "thin-edge.io"
+homepage:    "https://github.com/thin-edge/tedge-zerotouch-provisioning"
+license:     "Apache-2.0"
+
+depends:
+  - systemd
+
+contents:
+  # ── binary ──────────────────────────────────────────────────────────────
+  - src: "bin/ztp-agent-ble-linux-${BIN_ARCH}"
+    dst: /usr/bin/ztp-agent
+    file_info:
+      mode: 0755
+
+  # ── systemd unit ────────────────────────────────────────────────────────
+  - src: packaging/systemd/ztp-agent.service
+    dst: /lib/systemd/system/ztp-agent.service
+
+  # ── operator config (preserved across upgrades) ─────────────────────────
+  - src: examples/agent.toml
+    dst: /etc/ztp/agent.toml
+    type: config|noreplace
+
+  # ── v2 applier scripts ───────────────────────────────────────────────────
+  # Installed as config files so operator customisations survive upgrades.
+  - src: scripts/appliers/c8y.v2.sh
+    dst: /etc/ztp/appliers.d/c8y.v2.sh
+    type: config|noreplace
+    file_info:
+      mode: 0755
+
+  - src: scripts/appliers/files.v2.sh
+    dst: /etc/ztp/appliers.d/files.v2.sh
+    type: config|noreplace
+    file_info:
+      mode: 0755
+
+  - src: scripts/appliers/hook.v2.sh
+    dst: /etc/ztp/appliers.d/hook.v2.sh
+    type: config|noreplace
+    file_info:
+      mode: 0755
+
+  - src: scripts/appliers/ssh.authorized_keys.v2.sh
+    dst: /etc/ztp/appliers.d/ssh.authorized_keys.v2.sh
+    type: config|noreplace
+    file_info:
+      mode: 0755
+
+  - src: scripts/appliers/wifi.v2.sh
+    dst: /etc/ztp/appliers.d/wifi.v2.sh
+    type: config|noreplace
+    file_info:
+      mode: 0755
+
+  - src: scripts/appliers/passwd.v2.sh
+    dst: /etc/ztp/appliers.d/passwd.v2.sh
+    type: config|noreplace
+    file_info:
+      mode: 0755
+
+  # Shared INI parser library required by the v2 appliers.
+  - src: scripts/appliers/lib/ini.sh
+    dst: /etc/ztp/appliers.d/lib/ini.sh
+    type: config|noreplace
+    file_info:
+      mode: 0644
+
+  # ── runtime state directory ──────────────────────────────────────────────
+  - dst: /var/lib/ztp
+    type: dir
+    file_info:
+      mode: 0700
+      owner: root
+      group: root
+
+  # ── config directory ─────────────────────────────────────────────────────
+  # /etc/ztp/server.pub — operator places the server signing key here to
+  # enable strict trust anchoring without editing /etc/default/ztp-agent.
+  - dst: /etc/ztp
+    type: dir
+    file_info:
+      mode: 0755
+
+scripts:
+  postinstall: packaging/scripts/postinstall.sh
+  preremove:   packaging/scripts/preremove.sh

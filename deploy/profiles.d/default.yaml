@@ -1,0 +1,52 @@
+# Default provisioning profile for the docker-compose demo stack.
+#
+# Edit this file (or add new profiles next to it) and either restart the
+# server or POST /v1/admin/profiles/reload to pick up changes.
+
+name: default
+description: "Demo profile used by the docker-compose stack."
+priority: 0
+payload:
+    ssh:
+        user: root
+        github_users:
+            - reubenmiller
+    wifi:
+        networks:
+            - ssid: "iota"
+              password: ENC[AES256_GCM,data:kPnUCAG9cS2fkuTN2PUN6YvxTp6h1+7oKOAhTzxA3v+c,iv:eAzIc1FzaUu164wOpMYf25Gopf+sgigO5ACcn/70fFY=,tag:BS58saydv4q0jfQxABnkTg==,type:str]
+              key_mgmt: "WPA-PSK"
+    files:
+        files:
+            - path: /etc/ztp/provisioned.marker
+              mode: "0644"
+              contents: "provisioned-by-ztp-demo"
+            - path: /etc/tedge/mappers/c8y/flows/deployment-check/params.toml
+              mode: "0644"
+              contents: 'group = "zone0"'
+            - path: /etc/tedge/mappers/c8y/flows/deployment-apply/params.toml
+              mode: "0644"
+              contents: 'group = "zone0"'
+    # Cumulocity URL / tenant / credentials come from the standard go-c8y
+    # env vars (C8Y_BASEURL, C8Y_TENANT, C8Y_USER, C8Y_PASSWORD) which
+    # docker-compose passes through from the host shell.
+    cumulocity:
+        external_id_prefix: ""
+        token_ttl: ENC[AES256_GCM,data:s/Fk,iv:tdziQzZW70MwQYQ5Luklch3QubaC+H0+RSzQospD3NU=,tag:WR3OmOFrNEzwdKpcPPKGXw==,type:str]
+        issuer:
+            mode: "local"
+sops:
+    age:
+        - recipient: age1llzanqmgs5kh79s5ye4nz56k4g8ty2e5npts75jzfdezdegkmyeseal46q
+          enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBKNGtFbWtJckl4OFo2UHlx
+            RS82R0tsZ1J0eGVRdFZFTyszWHFrY0VCcVdNCjR0WkZLdlJkZVJ1ZzN1M1QwQml1
+            QXFlMFp4c0xsK1Q1RWNKN1A3TVRuc1UKLS0tIGJiZUt5QWlISkV6UGp0d1lwWW5O
+            aHE3TFhmTVBranZicGdpZ3JFVm1DYUUKd9xqnZM6f4t2J6SdKHgjjjv8dSXFBsNJ
+            B2O85TeSwTPFDNxaLQM/ao7Jg1biU4HKnssHfUYS4FjrRoMSXlk3xQ==
+            -----END AGE ENCRYPTED FILE-----
+    lastmodified: "2026-04-28T23:34:57Z"
+    mac: ENC[AES256_GCM,data:kJ7qutaTYyEZXqx1Ytb2MWCdVuyGQIQuCf3e11jirj2jdEYAu45Wv14W9eu8TGIS6h8QEWsQH85PoantifykghyO8teYBPJ7ImMuA/7tu9MmbMSF7kgvQhSyTwEenRA8M5z1Z68YX+1CxbPYF2qMRO5s0BVvWZxpDGORZLPEf5Y=,iv:WILpmW7/QsZnx27dKflhHVeTUhXsBgX6YVn14d52cj0=,tag:OPKCQEGHNIU+6advAMIlEA==,type:str]
+    encrypted_regex: ^(password|bootstrap_token|.*token.*|.*secret.*)$
+    version: 3.7.3

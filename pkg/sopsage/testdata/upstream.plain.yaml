@@ -1,0 +1,9 @@
+name: demo
+greeting: hello
+nested:
+  password: hunter2
+  list:
+    - alpha
+    - beta
+flag: true
+count: 42

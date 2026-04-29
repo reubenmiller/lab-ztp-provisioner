@@ -1,0 +1,95 @@
+[package]
+name = "ztp-agent"
+version = "0.1.0"
+edition = "2021"
+description = "Zero-Touch Provisioning device agent — Rust implementation"
+
+[[bin]]
+name = "ztp-agent"
+path = "src/main.rs"
+
+[lib]
+name = "ztp_agent"
+path = "src/lib.rs"
+
+# ---- features ----------------------------------------------------------------
+
+[features]
+default = []
+# mDNS discovery of the ZTP server on the local LAN
+mdns = ["dep:mdns-sd"]
+# BLE peripheral mode (Linux/BlueZ only; activates async runtime via bluer)
+# Build for Linux targets only: cargo zigbuild --features ble --target aarch64-unknown-linux-musl
+ble = ["dep:bluer", "dep:tokio", "dep:futures"]
+
+# ---- dependencies ------------------------------------------------------------
+
+[dependencies]
+
+# CLI
+clap = { version = "4", default-features = false, features = [
+  "std",
+  "derive",
+  "help",
+  "usage",
+  "error-context",
+] }
+
+# Serialisation
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+toml        = { version = "0.8", default-features = false, features = ["parse"] }
+
+# Cryptography — pure Rust, no OpenSSL
+ed25519-dalek      = { version = "2", features = ["rand_core"] }
+x25519-dalek       = { version = "2", features = ["static_secrets"] }
+chacha20poly1305   = "0.10"
+rand               = "0.8"
+base64             = "0.22"
+
+# Logging
+log        = "0.4"
+env_logger = { version = "0.11", default-features = false, features = ["humantime"] }
+
+# Timestamps — RFC3339, serde helpers
+chrono = { version = "0.4", features = ["serde"] }
+
+# HTTP client (sync) with rustls (no OpenSSL)
+ureq    = { version = "2", default-features = false, features = ["tls", "json"] }
+rustls  = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pemfile = "2"
+
+# Hostname resolution
+gethostname = "0.4"
+
+# Direct settimeofday(2) for the clock-adjustment step
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# mDNS discovery (optional)
+mdns-sd = { version = "0.11", optional = true }
+
+# BLE peripheral — Linux/BlueZ only (optional, activated by `--features ble`)
+bluer   = { version = "0.17", optional = true, features = ["full"] }
+tokio   = { version = "1",    optional = true, features = ["rt", "io-util", "macros"] }
+futures = { version = "0.3",  optional = true }
+
+# ---- dev dependencies -------------------------------------------------------
+
+[dev-dependencies]
+tempfile = "3"
+
+# Target: ~1 MB stripped static musl binary.
+
+[profile.release]
+opt-level     = "z"    # size-optimised
+lto           = true
+codegen-units = 1
+strip         = true
+panic         = "abort"
+
+# ---- dev profile -------------------------------------------------------------
+
+[profile.dev]
+opt-level = 0
+debug     = true

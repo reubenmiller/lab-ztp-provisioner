@@ -1,0 +1,86 @@
+# Caddy reverse proxy for ZTP.
+#
+# The same file works locally and in production:
+#
+#   Local (default):  ZTP_SITE_ADDRESS=localhost
+#                     ZTP_TLS_EMAIL=internal     -> Caddy local CA
+#
+#   Production:       ZTP_SITE_ADDRESS=ztp.example.com
+#                     ZTP_TLS_EMAIL=ops@example.com  -> Let's Encrypt (automatic)
+#
+# `tls internal` makes Caddy mint a local CA on first start and write its
+# root cert to /data/caddy/pki/authorities/local/root.crt — the docker-compose
+# stack mounts that into demo device containers so they can verify HTTPS
+# with `-ca` instead of `-insecure`. This means the LOCAL demo exercises the
+# exact same code path as a real public deployment.
+#
+# Admin endpoints (/v1/admin/*) are still bearer-token authenticated by the
+# upstream ztp-server. In production you should additionally restrict them
+# at the proxy — uncomment the `@admin` block below and put your operator's
+# IP, VPN range, or basic-auth in front.
+
+{
+	# `auto_https disable_redirects` keeps :80 unredirected for local dev
+	# (we don't expose :80 in compose anyway). For prod, drop this line so
+	# Caddy auto-redirects http→https.
+	auto_https disable_redirects
+	admin off
+}
+
+# --- shared route map -------------------------------------------------------
+# `/v1/*`  -> ztp-server (enrollment + admin API).
+# `/*`     -> web (SPA). In dev that's the vite container (HMR works because
+#            Caddy proxies the websocket transparently). In production point
+#            this at a built static site or `file_server * { root /srv }`.
+(ztp_routes) {
+	handle /v1/* {
+		reverse_proxy server:8080 {
+			header_up X-Real-IP {remote_host}
+		}
+	}
+	handle {
+		reverse_proxy web:5173 {
+			header_up X-Real-IP {remote_host}
+		}
+	}
+}
+
+# --- internal docker-network face -------------------------------------------
+# Demo devices in the compose stack reach Caddy via the network alias
+# https://ztp/ . This block always uses Caddy's local internal CA so the
+# "ztp" SNI matches a real cert in BOTH local AND prod deployments — devices
+# never need to hit the public hostname (which in prod is a real Let's
+# Encrypt cert).
+ztp {
+	tls internal
+	import ztp_routes
+}
+
+# --- public-facing site -----------------------------------------------------
+{$ZTP_SITE_ADDRESS:localhost} {
+	tls {$ZTP_TLS_EMAIL:internal}
+
+	# --- production hardening ------------------------------------------------
+	# Uncomment to restrict /v1/admin/* to specific IPs (in addition to the
+	# bearer token enforced by the server).
+	#
+	# @admin path /v1/admin/*
+	# @admin_allowed remote_ip 10.0.0.0/8 192.168.0.0/16
+	# handle @admin {
+	#     @bad not remote_ip 10.0.0.0/8 192.168.0.0/16
+	#     respond @bad 403
+	#     reverse_proxy server:8080
+	# }
+
+	# Basic security headers. HSTS is conditional: only sent over a real
+	# HTTPS connection so it doesn't poison localhost dev.
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Strict-Transport-Security "max-age=63072000; includeSubDomains"
+	}
+
+	import ztp_routes
+}
+

@@ -1,0 +1,38 @@
+[Unit]
+Description=Zero-Touch Provisioning agent
+Documentation=https://github.com/thin-edge/tedge-zerotouch-provisioning
+# Wait for the network to be fully up — mDNS and HTTPS both require it.
+After=bluetooth.service network-online.target
+Wants=bluetooth.service network-online.target
+# Skip this unit on subsequent boots once the device is provisioned.
+# The wrapper script performs the same check, but this condition prevents
+# systemd from even spawning the process.
+ConditionPathExists=!/var/lib/ztp/provisioned
+# Give up after 5 attempts within 10 minutes so a misconfigured device
+# doesn't loop forever consuming battery / network.
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+# Keep the unit in "active" state after the command exits 0, so that
+# dependent units (e.g. tedge-agent) can use After=ztp-agent.service.
+RemainAfterExit=yes
+
+# Unblock bluetooth rfkill if needed
+ExecStartPre=-/usr/sbin/rfkill unblock bluetooth
+
+ExecStart=/usr/bin/ztp-agent --config /etc/ztp/agent.toml
+
+# Retry on transient failures (e.g. server not yet reachable).
+Restart=on-failure
+RestartSec=30s
+
+# Run as root (required to write /etc/ztp applier outputs and system files).
+User=root
+
+# Keep logs under a dedicated identifier.
+SyslogIdentifier=ztp-agent
+
+[Install]
+WantedBy=multi-user.target

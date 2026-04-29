@@ -1,0 +1,17 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "ztp-app",
+  "outputfilename": "ztp-app",
+  "frontend:dir": "../../web",
+  "frontend:install": "pnpm install --frozen-lockfile",
+  "frontend:build": "pnpm build && cd ../.. && just web-embed-sync",
+  "frontend:dev:watcher": "pnpm dev --port 5175",
+  "frontend:dev:serverUrl": "http://localhost:5175",
+  "info": {
+    "companyName": "thin-edge",
+    "productName": "ZTP",
+    "productVersion": "0.0.1",
+    "copyright": "",
+    "comments": "Zero-Touch Provisioning desktop app"
+  }
+}

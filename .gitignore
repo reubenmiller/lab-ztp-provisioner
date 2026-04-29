@@ -1,0 +1,24 @@
+/bin/
+/dist/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+/data/
+/var/
+/web/node_modules/
+/web/build/
+/web/.svelte-kit/
+.env
+.env.local
+*.pem
+*.key
+!testdata/**/*.pem
+!testdata/**/*.key
+.DS_Store
+/web/.pnpm-store/
+clients/rust/target/
+
+# Generated cross-language test vectors (contain synthetic keys that trip secret scanners).
+# Regenerated automatically by `go test ./pkg/protocol` and by the Rust build.rs.
+testdata/vectors/

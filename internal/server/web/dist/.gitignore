@@ -1,0 +1,7 @@
+# Built SPA artefacts populated by `just web-build` (which copies
+# web/build/ here). Keep the directory committed via .gitkeep so
+# go:embed succeeds even on a fresh clone, but never commit the
+# generated files.
+*
+!.gitkeep
+!.gitignore

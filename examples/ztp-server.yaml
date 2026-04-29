@@ -1,0 +1,64 @@
+# Example ZTP server config.
+# Copy to ztp-server.yaml and edit.
+
+listen: ":8080"
+
+# Bearer token for the admin API + SPA access. May also be supplied via the
+# ZTP_ADMIN_TOKEN environment variable (preferred — keeps secrets out of
+# config files). The server REFUSES TO START if neither is set; there is no
+# insecure default. Generate with `openssl rand -hex 32`.
+admin_token: ""
+
+# Ed25519 private key (base64) used to sign provisioning bundles. Devices
+# verify with the matching public key. If empty, the server generates an
+# ephemeral key on startup (devices will then reject any post-restart
+# bundles — fine for dev only).
+signing_key: ""
+signing_key_id: "ztp-server-1"
+
+# TLS — leave both empty to run plain HTTP behind a reverse proxy.
+tls:
+  cert: ""
+  key:  ""
+
+# Maximum allowed difference between a request's timestamp and server time.
+# Devices with unsynced clocks are auto-corrected via the server_time field
+# returned in every response (see Architecture: Clock skew handling).
+# Tighten to reduce the replay window; loosen for devices with worse clocks.
+# Default: 5m
+clock_skew: "5m"
+
+# Verifier chain. Order matters: first non-pending verdict wins. Anything
+# that ends up still pending after every verifier goes to the manual-approval
+# queue surfaced in the SPA.
+verifiers:
+  - allowlist
+  - bootstrap_token
+  - known_keypair
+  # - tpm_attestation   # stub; plug in your own
+
+# Provisioning profiles.
+#
+# Profiles replace the legacy top-level `payload:` block. Each device is
+# matched to exactly one profile via the resolver's precedence chain:
+#
+#   1. Device.Overrides["_profile"]    (operator-set override)
+#   2. Device.ProfileName              (sticky from prior enrollment)
+#   3. Verifier hint                   (allowlist entry / bootstrap token)
+#   4. Profile selector match          (priority-ordered)
+#   5. default_profile (config below)
+#   6. literal "default"               (the fallback profile)
+#
+# When nothing matches, enrollment is rejected — there's no silent
+# "issue an empty bundle" path.
+#
+# File-backed profiles live under profiles_dir as one YAML file per profile.
+# They are read-only via the admin API; operators edit them in git and
+# either restart the server or POST /v1/admin/profiles/reload.
+#
+# DB-backed profiles are created/edited via the admin UI and stored in the
+# Store. File and DB profiles are merged at lookup time; on name collision
+# the file profile wins so a git-managed profile cannot be silently
+# overridden from the UI.
+profiles_dir: "/etc/ztp/profiles.d"
+default_profile: "default"

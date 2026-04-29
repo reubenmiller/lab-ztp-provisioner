@@ -1,0 +1,74 @@
+# ztp-app desktop config — wires the desktop binary to the same
+# persistent state the docker-compose stack uses. Run from the
+# project root:
+#
+#     just app-build
+#     bin/ztp-app -config deploy/config/ztp-app.yaml
+#
+# This points at the host paths under deploy/data/ (the docker stack
+# mounts the same directory at /var/lib/ztp/ inside the container —
+# see deploy/config/ztp-server.yaml for the in-container view).
+#
+# WARNING: do NOT run `just up` and `bin/ztp-app -config …` against
+# this config simultaneously. SQLite cannot be safely opened by two
+# processes in WAL mode; one of them will see corruption or stale
+# reads. Stop the docker stack first (`just down`), or copy the data
+# directory and point the desktop app at the copy.
+#
+# Knobs the YAML deliberately omits — ztp-app overrides them based
+# on CLI flags or hard-codes them:
+#   - listen          → 127.0.0.1:0 by default; `-listen :8080` or `-mdns` opts into LAN
+#   - tls             → always off on the desktop (Wails proxies; bearer token is the auth boundary)
+#   - admin_token     → auto-generated and handed to the SPA via Wails binding
+
+# Persisted Ed25519 signing key. Created by the docker stack on first
+# `just up`; reused here so devices that already trust this server's
+# public key keep working.
+signing_key_file: "deploy/data/signing.key"
+signing_key_id: "ztp-server-demo"
+
+# Persisted age (X25519) identity for SOPS-age decryption of profile
+# files. Same file the docker stack uses; the desktop app can read
+# operator-sealed profile YAMLs without any extra plumbing.
+age_key_file: "deploy/data/age.key"
+
+clock_skew: "5m"
+
+# Persistent SQLite store — same database file the docker stack
+# writes to. Pending requests, allowlist entries, issued tokens,
+# audit log all carry across between desktop and daemon usage.
+store:
+  driver: "sqlite"
+  dsn: "deploy/data/ztp.db"
+
+verifiers:
+  - allowlist
+  - bootstrap_token
+  - known_keypair
+
+# Profile files (file-backed, read-only via the admin UI). The
+# docker stack mounts deploy/profiles.d/ at /etc/ztp/profiles.d
+# inside the container; the desktop app reads them directly off the
+# host.
+profiles_dir: "deploy/profiles.d"
+default_profile: "default"
+
+# mDNS-SD: advertise the engine on the LAN as _ztp._tcp so devices
+# running ztp-agent without a -server flag discover it automatically.
+# Pure-Go publisher — no admin/root needed on macOS, Linux, or
+# Windows; coexists with the OS mDNS responder (Bonjour, avahi,
+# Windows Connection Manager) via SO_REUSEPORT.
+#
+# Equivalent to passing `-mdns` on the CLI. When using the flag, the
+# app forces this on regardless of YAML so a flag-driven launch is
+# self-contained.
+#
+# When mDNS is enabled the app also defaults `-listen` to ":8080"
+# (override with `-listen` if you need a different port). Loopback-
+# only listeners are not announced.
+mdns:
+  enabled: true
+#   service: "_ztp._tcp"
+#   # public_host overrides the announced SRV target hostname; leave
+#   # empty to use os.Hostname() (typically "<your-mac-name>.local").
+#   public_host: ""
