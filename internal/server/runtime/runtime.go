@@ -233,12 +233,22 @@ func loadConfig(opts Options) (*config.Config, error) {
 	return config.Load(opts.ConfigPath)
 }
 
-// resolveAdminToken applies the override → config → env precedence and
-// validates length. Same rules main.go used to enforce inline.
+// resolveAdminToken applies the override → inline → file → env
+// precedence and validates length. Same rules main.go used to enforce
+// inline, plus admin_token_file support so the token can come from a
+// Docker secret, an init-scaffolded file, or any other on-disk source
+// without ever surfacing on a process command line or in process env.
 func resolveAdminToken(cfg *config.Config, opts Options) (string, error) {
 	tok := opts.AdminTokenOverride
 	if tok == "" {
 		tok = cfg.AdminToken
+	}
+	if tok == "" && cfg.AdminTokenFile != "" {
+		t, err := readAdminTokenFile(cfg.AdminTokenFile)
+		if err != nil {
+			return "", fmt.Errorf("admin_token_file: %w", err)
+		}
+		tok = t
 	}
 	if tok == "" {
 		tok = os.Getenv("ZTP_ADMIN_TOKEN")
@@ -250,6 +260,33 @@ func resolveAdminToken(cfg *config.Config, opts Options) (string, error) {
 		return "", ErrAdminTokenTooShort
 	}
 	return tok, nil
+}
+
+// readAdminTokenFile returns the first non-empty, non-comment line of
+// the file. Comment lines start with '#'. This makes the format
+// tolerant of `.env`-style files (`KEY=value` is treated as the
+// literal value once we strip a leading `ZTP_ADMIN_TOKEN=`) without
+// requiring a separate parser. Most operators will just write the
+// raw token, which works trivially.
+func readAdminTokenFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// Allow `ZTP_ADMIN_TOKEN=value` so a single .env-style file
+		// works for both `source .env && ztp-server` and
+		// `admin_token_file: .env`.
+		if eq := strings.IndexByte(line, '='); eq > 0 && line[:eq] == "ZTP_ADMIN_TOKEN" {
+			line = line[eq+1:]
+		}
+		return strings.TrimSpace(line), nil
+	}
+	return "", errors.New("file is empty")
 }
 
 // startMDNS publishes the _ztp._tcp record when enabled in config.

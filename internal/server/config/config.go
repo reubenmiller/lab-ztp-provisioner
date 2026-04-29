@@ -17,12 +17,19 @@ import (
 
 // Config is the YAML-loaded server configuration.
 type Config struct {
-	Listen         string    `yaml:"listen"` // e.g. ":8443"
-	TLS            TLSConfig `yaml:"tls"`
-	AdminToken     string    `yaml:"admin_token"`      // bearer token for /v1/admin
-	SigningKey     string    `yaml:"signing_key"`      // base64 Ed25519 priv (inline; takes precedence over file)
-	SigningKeyFile string    `yaml:"signing_key_file"` // path to a base64 Ed25519 priv key; created on first start
-	SigningKeyID   string    `yaml:"signing_key_id"`
+	Listen     string    `yaml:"listen"` // e.g. ":8443"
+	TLS        TLSConfig `yaml:"tls"`
+	AdminToken string    `yaml:"admin_token"` // bearer token for /v1/admin (inline; takes precedence over file/env)
+	// AdminTokenFile is a path to a file whose first non-empty line is
+	// the bearer token. Mirrors signing_key_file / age_key_file: makes
+	// the token easy to source from Docker secrets (mounted at
+	// /run/secrets/…), `ztp-server init` (writes data/admin.token),
+	// or any other secret-management tool. Resolved AFTER inline
+	// admin_token but BEFORE the ZTP_ADMIN_TOKEN env var.
+	AdminTokenFile string `yaml:"admin_token_file"`
+	SigningKey     string `yaml:"signing_key"`      // base64 Ed25519 priv (inline; takes precedence over file)
+	SigningKeyFile string `yaml:"signing_key_file"` // path to a base64 Ed25519 priv key; created on first start
+	SigningKeyID   string `yaml:"signing_key_id"`
 
 	// AgeKey is the inline AGE-SECRET-KEY-… string used to decrypt
 	// SOPS-age sealed profile files. Takes precedence over AgeKeyFile.
