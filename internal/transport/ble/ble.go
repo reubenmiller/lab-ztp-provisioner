@@ -130,9 +130,24 @@ func (p *Peripheral) Serve(ctx context.Context, handler func(req []byte) (resp [
 		return fmt.Errorf("add service: %w", err)
 	}
 
+	// LocalName is intentionally omitted from the advertisement payload.
+	// A 128-bit service UUID consumes 18 of the 31 bytes available in
+	// a BLE 4.x primary advertisement (after the 3-byte Flags AD type),
+	// leaving only ~8 bytes for any LocalName before the host stack is
+	// forced to push one of name/UUID into the scan-response packet.
+	// WinRT centrals default to passive scanning, which discards scan-
+	// response data — the symptom an operator sees is "0 of 600+
+	// scanned advertisements matched ZTP", followed by sporadic
+	// successes whenever Windows happens to deliver the right slice.
+	//
+	// Dropping LocalName here keeps the advertisement deterministic at
+	// 21 bytes (3 flags + 18 UUID), well under the 31-byte cap, so
+	// every passive-scan central reliably sees the service UUID. The
+	// peripheral's name is still readable post-connect via the GAP
+	// Device Name characteristic; identification before connect uses
+	// the MAC address (deviceLabel falls back to that automatically).
 	adv := p.adapter.DefaultAdvertisement()
 	if err := adv.Configure(bluetooth.AdvertisementOptions{
-		LocalName:    p.name,
 		ServiceUUIDs: []bluetooth.UUID{svcUUID},
 	}); err != nil {
 		return fmt.Errorf("configure adv: %w", err)
