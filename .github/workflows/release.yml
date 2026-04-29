@@ -44,7 +44,7 @@ jobs:
       sign_macos: ${{ steps.v.outputs.sign_macos }}
       sign_windows: ${{ steps.v.outputs.sign_windows }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -87,14 +87,14 @@ jobs:
     runs-on: ubuntu-latest
     needs: prepare
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           version: 9
           run_install: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: pnpm
@@ -106,7 +106,7 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm build
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: web-build
           path: web/build
@@ -133,9 +133,9 @@ jobs:
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: web-build
           path: web/build
@@ -146,7 +146,7 @@ jobs:
           rm -rf internal/server/web/dist/*
           cp -r web/build/. internal/server/web/dist/
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
@@ -198,13 +198,13 @@ jobs:
         run: |
           cp "staging/ztp-agent-ble" "bin/ztp-agent-ble-linux-${{ matrix.bin_arch }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: go-binaries-${{ matrix.target }}
           path: dist/
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: matrix.goos == 'linux'
         with:
           name: go-binaries-raw-${{ matrix.target }}
@@ -232,10 +232,10 @@ jobs:
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
 
       - name: Build Rust agent (${{ matrix.cell }})
         run: |
@@ -269,7 +269,7 @@ jobs:
           tar -C bin -czf "dist/ztp-agent-rust-${VERSION}-${{ matrix.cell }}.tar.gz" \
             "ztp-agent-rust-linux-${{ matrix.bin_arch }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: rust-binaries-${{ matrix.cell }}
           path: dist/
@@ -277,7 +277,7 @@ jobs:
 
       # Only the gnu (BLE) variants feed into the Linux packages — that's what
       # nfpm-rust.yaml expects (fully featured agent, not the musl-static one).
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: endsWith(matrix.cell, '-gnu')
         with:
           name: rust-binaries-raw-${{ matrix.cell }}
@@ -293,9 +293,9 @@ jobs:
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
@@ -309,7 +309,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y just gettext-base
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -348,7 +348,7 @@ jobs:
             just pkg-alpine-rust-${arch} "$VERSION"
           done
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-packages
           path: |
@@ -366,9 +366,9 @@ jobs:
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: web-build
           path: web/build
@@ -379,7 +379,7 @@ jobs:
           rm -rf internal/server/web/dist/*
           cp -r web/build/. internal/server/web/dist/
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
@@ -438,7 +438,7 @@ jobs:
           tar -C cmd/ztp-app/build/bin -czf \
             "dist/ztp-app-${VERSION}-darwin-universal.tar.gz" ztp-app.app
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: desktop-mac
           path: dist/
@@ -456,9 +456,9 @@ jobs:
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: web-build
           path: web/build
@@ -469,7 +469,7 @@ jobs:
           rm -rf internal/server/web/dist/*
           cp -r web/build/. internal/server/web/dist/
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
@@ -512,7 +512,7 @@ jobs:
           cd cmd/ztp-app/build/bin
           7z a "../../../../dist/ztp-app-${VERSION}-windows-amd64.zip" ztp-app.exe
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: desktop-windows
           path: dist/
@@ -533,9 +533,9 @@ jobs:
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: web-build
           path: web/build
@@ -551,7 +551,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config build-essential
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
@@ -578,7 +578,7 @@ jobs:
           tar -C cmd/ztp-app/build/bin -czf \
             "dist/ztp-app-${VERSION}-linux-${{ matrix.arch }}.tar.gz" ztp-app
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: desktop-linux-${{ matrix.arch }}
           path: dist/
@@ -605,9 +605,9 @@ jobs:
       VERSION: ${{ needs.prepare.outputs.version }}
       IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: web-build
           path: web/build
@@ -618,17 +618,17 @@ jobs:
           rm -rf internal/server/web/dist/*
           cp -r web/build/. internal/server/web/dist/
 
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
@@ -637,7 +637,7 @@ jobs:
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-') }}
             type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
 
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile
@@ -667,9 +667,9 @@ jobs:
       - container-images
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -684,7 +684,7 @@ jobs:
           cd out && sha256sum * > SHA256SUMS
           ls -la
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
           prerelease: ${{ needs.prepare.outputs.is_prerelease == 'true' }}
@@ -705,7 +705,7 @@ jobs:
       VERSION: ${{ needs.prepare.outputs.version }}
       TAG: ${{ needs.prepare.outputs.tag }}
     steps:
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
