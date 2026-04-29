@@ -148,15 +148,10 @@ mod imp {
     }
 
     /// Return a name suitable for the BLE advertising payload.
-    /// BlueZ automatically overflows a long name into the scan-response PDU,
-    /// so we pass the full id through rather than truncating it.
-    /// `prefix` is prepended to `id`; when empty it defaults to `"ztp-"`.
+    // Use a fixed short name to ensure it is compatible across
+    // different OS's
     fn ble_advertised_name(id: &str, prefix: &str) -> String {
-        let prefix = if prefix.is_empty() { "ztp-" } else { prefix };
-        if id.is_empty() {
-            return format!("{prefix}device");
-        }
-        format!("{prefix}{id}")
+        format!("ztp")
     }
 
     // ── Async serve loop ─────────────────────────────────────────────────────
@@ -279,7 +274,7 @@ mod imp {
         // Prefix the device id so ZTP peripherals are recognisable in BLE
         // scanners. BlueZ overflows long names into the scan-response PDU.
         let adv_name = ble_advertised_name(&device_id, &cfg.ble_name_prefix);
-        log::info!("BLE: advertising peripheral name={adv_name}");
+        log::info!("BLE: advertising peripheral name={adv_name}, device_id={device_id}");
         let mut svc_uuids = BTreeSet::new();
         svc_uuids.insert(svc_uuid);
         let adv = Advertisement {
