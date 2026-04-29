@@ -317,26 +317,54 @@ func Enroll(ctx context.Context, scanTimeout time.Duration, progress ProgressFn,
 	if err != nil || len(svcs) == 0 {
 		return nil, fmt.Errorf("discover service: %w", err)
 	}
-	chars, err := svcs[0].DiscoverCharacteristics(nil)
+	// Discover by explicit UUID list rather than nil-for-everything.
+	// On Windows WinRT this routes to GetCharacteristicsForUuidAsync
+	// which reliably returns the requested characteristic objects;
+	// the unfiltered GetCharacteristicsAsync path has been observed
+	// to return an empty/incomplete list against BlueZ peripherals
+	// even after a successful service-discovery round-trip. We name
+	// every characteristic the protocol uses (Request, Response,
+	// Status, TimeSync) so a single GATT round-trip surfaces them
+	// all.
+	reqUUID := parseUUID(RequestUUID)
+	respUUID := parseUUID(ResponseUUID)
+	statUUID := parseUUID(StatusUUID)
+	tsUUID := parseUUID(TimeSyncUUID)
+	chars, err := svcs[0].DiscoverCharacteristics([]bluetooth.UUID{reqUUID, respUUID, statUUID, tsUUID})
 	if err != nil {
 		return nil, fmt.Errorf("discover chars: %w", err)
 	}
 	var reqCh, respCh, timeSyncCh *bluetooth.DeviceCharacteristic
+	seenUUIDs := make([]string, 0, len(chars))
 	for i := range chars {
-		switch chars[i].UUID().String() {
-		case parseUUID(RequestUUID).String():
+		u := chars[i].UUID()
+		seenUUIDs = append(seenUUIDs, u.String())
+		// Direct UUID equality (UUID is a [4]uint32 value type) is
+		// safer than .String() comparison: tinygo's per-platform
+		// stringification has historically returned different cases
+		// between BlueZ and WinRT, which silently broke the previous
+		// switch even when the underlying bytes matched.
+		switch u {
+		case reqUUID:
 			c := chars[i]
 			reqCh = &c
-		case parseUUID(ResponseUUID).String():
+		case respUUID:
 			c := chars[i]
 			respCh = &c
-		case parseUUID(TimeSyncUUID).String():
+		case tsUUID:
 			c := chars[i]
 			timeSyncCh = &c
 		}
 	}
+	slog.Debug("ble: characteristics discovered",
+		"count", len(chars),
+		"uuids", seenUUIDs,
+		"request_found", reqCh != nil,
+		"response_found", respCh != nil,
+		"timesync_found", timeSyncCh != nil)
 	if reqCh == nil || respCh == nil {
-		return nil, errors.New("device missing required ZTP characteristics")
+		return nil, fmt.Errorf("device missing required ZTP characteristics (discovered %d: %v; need request=%s, response=%s)",
+			len(chars), seenUUIDs, RequestUUID, ResponseUUID)
 	}
 
 	// Best-effort time sync. Older devices may not advertise the
