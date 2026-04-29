@@ -17,8 +17,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"tinygo.org/x/bluetooth"
@@ -221,8 +223,43 @@ func Enroll(ctx context.Context, scanTimeout time.Duration, progress ProgressFn,
 	emit(PhaseScanning, "")
 	target := parseUUID(ServiceUUID)
 	devCh := make(chan bluetooth.ScanResult, 1)
+
+	// Instrumentation that distinguishes the failure modes a bare
+	// "scan timed out" can't tell apart:
+	//
+	//   advertCount == 0  → adapter is up but no advertisements
+	//                       reached us. On Windows this is almost
+	//                       always Settings > Privacy > Bluetooth
+	//                       blocking unpackaged desktop apps; on Linux
+	//                       it usually means the radio is rfkill'd or
+	//                       the user lacks permissions.
+	//   advertCount  > 0  → adverts came in but none matched. Either
+	//                       the device isn't advertising, OR the BLE
+	//                       stack only sees the primary advertisement
+	//                       (passive scan, common on WinRT) and our
+	//                       service UUID / local name was placed in
+	//                       the scan-response payload by BlueZ
+	//                       because the 31-byte primary was full.
+	//   scanErr   != nil  → adapter.Scan returned an error — used to
+	//                       be silently dropped, now surfaced.
+	//
+	// The match-callback runs on tinygo's scan goroutine so the
+	// counters use atomic. The slog.Default() calls drop into the
+	// app's verbose log when -v is set; the error path includes the
+	// counts unconditionally so production logs always have enough
+	// signal.
+	var advertCount int64
+	var scanErr error
 	go func() {
-		_ = adapter.Scan(func(_ *bluetooth.Adapter, sr bluetooth.ScanResult) {
+		scanErr = adapter.Scan(func(_ *bluetooth.Adapter, sr bluetooth.ScanResult) {
+			n := atomic.AddInt64(&advertCount, 1)
+			slog.Debug("ble: advertisement",
+				"i", n,
+				"address", sr.Address.String(),
+				"name", sr.LocalName(),
+				"rssi", sr.RSSI,
+				"has_service_uuid", sr.AdvertisementPayload.HasServiceUUID(target),
+			)
 			if matchesZTPPeripheral(sr, target) {
 				select {
 				case devCh <- sr:
@@ -236,6 +273,28 @@ func Enroll(ctx context.Context, scanTimeout time.Duration, progress ProgressFn,
 	if scanTimeout <= 0 {
 		scanTimeout = 20 * time.Second
 	}
+
+	// Periodic liveness progress: refresh PhaseScanning every 2s with
+	// the running advert count. Gives the SPA something to render so
+	// the user can tell the difference between "scanning, just slow"
+	// and "scanning, nothing on the air". Stops as soon as the select
+	// below returns. Synchronous progress() emits are safe — the
+	// desktop binding wraps Wails' EventsEmit which is non-blocking.
+	tickCtx, tickCancel := context.WithCancel(ctx)
+	defer tickCancel()
+	go func() {
+		t := time.NewTicker(2 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-tickCtx.Done():
+				return
+			case <-t.C:
+				emit(PhaseScanning, fmt.Sprintf("%d adverts seen", atomic.LoadInt64(&advertCount)))
+			}
+		}
+	}()
+
 	var sr bluetooth.ScanResult
 	select {
 	case <-ctx.Done():
@@ -243,7 +302,7 @@ func Enroll(ctx context.Context, scanTimeout time.Duration, progress ProgressFn,
 		return nil, ctx.Err()
 	case <-time.After(scanTimeout):
 		_ = adapter.StopScan()
-		return nil, errors.New("no ZTP peripheral found within scan timeout")
+		return nil, scanTimeoutError(atomic.LoadInt64(&advertCount), scanErr, scanTimeout)
 	case sr = <-devCh:
 	}
 
@@ -331,6 +390,31 @@ func Enroll(ctx context.Context, scanTimeout time.Duration, progress ProgressFn,
 	}
 	emit(PhaseDone, "")
 	return &EnrollResult{EnvelopeBytes: envelope, BundleBytes: bundle}, nil
+}
+
+// scanTimeoutError builds a diagnostic error message that distinguishes
+// "saw nothing at all" (most likely a permission/adapter issue) from
+// "saw advertisements but none were ZTP" (most likely a peripheral or
+// advertisement-payload-fit issue), and surfaces any error returned by
+// adapter.Scan itself (used to be silently swallowed).
+func scanTimeoutError(advertCount int64, scanErr error, scanTimeout time.Duration) error {
+	if scanErr != nil {
+		return fmt.Errorf("ble scan failed: %w (after %s, %d adverts seen)", scanErr, scanTimeout, advertCount)
+	}
+	if advertCount == 0 {
+		return fmt.Errorf(
+			"no BLE advertisements received during %s scan — the adapter is up but the OS isn't delivering any. "+
+				"Common causes: Bluetooth radio off, Settings > Privacy > Bluetooth disallowing this app (Windows), "+
+				"rfkill blocking the radio (Linux), or the binary lacks Bluetooth capability (sandboxed macOS).",
+			scanTimeout)
+	}
+	return fmt.Errorf(
+		"saw %d BLE advertisement(s) in %s but none matched ZTP service UUID %s or local name prefix %q. "+
+			"Verify the device is advertising. On Windows centrals, the OS may only see the primary "+
+			"advertisement payload — if both the service UUID and the device name are too large to fit, "+
+			"the peripheral pushes one of them into the scan response which Windows passive-scanning ignores. "+
+			"Run with -v to log every advertisement seen.",
+		advertCount, scanTimeout, ServiceUUID, LocalNamePrefix)
 }
 
 // deviceLabel returns a human-readable identifier for a scan result —
