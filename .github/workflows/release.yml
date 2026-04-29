@@ -262,11 +262,11 @@ jobs:
             sudo dpkg --add-architecture "$DPKG_ARCH"
 
             # Add ports repo for foreign arch
-            sudo tee /etc/apt/sources.list.d/arm64.list <<EOF
-            deb [arch=$DPKG_ARCH] http://ports.ubuntu.com/ubuntu-ports noble main universe restricted multiverse
-            deb [arch=$DPKG_ARCH] http://ports.ubuntu.com/ubuntu-ports noble-updates main universe restricted multiverse
-            deb [arch=$DPKG_ARCH] http://ports.ubuntu.com/ubuntu-ports noble-security main universe restricted multiverse
-            EOF
+            {
+              echo "deb [arch=${DPKG_ARCH}] http://ports.ubuntu.com/ubuntu-ports noble main universe restricted multiverse"
+              echo "deb [arch=${DPKG_ARCH}] http://ports.ubuntu.com/ubuntu-ports noble-updates main universe restricted multiverse"
+              echo "deb [arch=${DPKG_ARCH}] http://ports.ubuntu.com/ubuntu-ports noble-security main universe restricted multiverse"
+            } | sudo tee "/etc/apt/sources.list.d/${DPKG_ARCH}.list"
           fi
           sudo apt-get update
           if [[ "$DPKG_ARCH" == "amd64" ]]; then
