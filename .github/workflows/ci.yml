@@ -1,0 +1,83 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # The web SPA is //go:embed-ed by ztp-server, so a populated
+      # internal/server/web/dist/ directory must exist before `go build`
+      # touches that package. Use a placeholder for vet+test.
+      - name: Seed embed dir
+        run: |
+          mkdir -p internal/server/web/dist
+          touch internal/server/web/dist/.gitkeep
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./... -count=1
+
+  rust:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/rust
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients/rust
+
+      # build.rs calls `go test` to refresh test vectors; install Go so the
+      # vectors generate cleanly (soft-fails otherwise — see clients/rust/build.rs).
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - run: cargo build --features mdns
+      - run: cargo test --features mdns
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: pnpm install
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: pnpm build
+        working-directory: web
+        run: pnpm build

@@ -1,0 +1,38 @@
+#!/sbin/openrc-run
+# OpenRC init script for ztp-agent (one-shot).
+#
+# Mirrors the systemd unit at packaging/systemd/ztp-agent.service:
+#   - waits for network
+#   - skips when /var/lib/ztp/provisioned exists
+#   - runs /usr/bin/ztp-agent --config /etc/ztp/agent.toml in foreground
+#
+# Enable on next boot:
+#   rc-update add ztp-agent default
+# Run now:
+#   rc-service ztp-agent start
+# Re-provision:
+#   rm -f /var/lib/ztp/provisioned && rc-service ztp-agent start
+
+name="ztp-agent"
+description="Zero-Touch Provisioning agent (one-shot)"
+
+command="/usr/bin/ztp-agent"
+command_args="--config /etc/ztp/agent.toml"
+command_background=false
+pidfile="/run/${RC_SVCNAME}.pid"
+
+depend() {
+    need net
+    after firewall bluetooth
+}
+
+start_pre() {
+    if [ -f /var/lib/ztp/provisioned ]; then
+        einfo "ztp-agent already provisioned (sentinel /var/lib/ztp/provisioned exists); skipping."
+        exit 0
+    fi
+    if command -v rfkill >/dev/null 2>&1; then
+        rfkill unblock bluetooth 2>/dev/null || true
+    fi
+    return 0
+}

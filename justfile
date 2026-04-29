@@ -332,6 +332,63 @@ pkg-rust-armhf fmt="deb" ver="": rust-docker-armv7
 # Build .deb packages for the Rust agent across all three architectures.
 pkg-rust-all fmt="deb" ver="": (pkg-rust-amd64 fmt ver) (pkg-rust-arm64 fmt ver) (pkg-rust-armhf fmt ver)
 
+# ── Alpine (apk) packages ─────────────────────────────────────────────────────
+#
+# Alpine uses OpenRC, not systemd, so a separate set of recipes + nfpm configs
+# (packaging/nfpm-alpine-{go,rust}.yaml) is needed. Same binary inputs as the
+# .deb/.rpm recipes; the format differs only in the init system + arch naming
+# (apk uses x86_64 / aarch64 / armv7 instead of amd64 / arm64 / armhf).
+
+# Build a .apk for the Go agent (linux/amd64).
+pkg-alpine-go-amd64 ver="": cross-agent-ble
+    #!/usr/bin/env bash
+    set -euo pipefail
+    VER="{{ver}}"; [ -z "$VER" ] && VER=$(just _pkg-version)
+    just _pkg packaging/nfpm-alpine-go.yaml x86_64 amd64 apk "$VER"
+
+# Build a .apk for the Go agent (linux/arm64).
+pkg-alpine-go-arm64 ver="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just cross-agent-ble arm64
+    VER="{{ver}}"; [ -z "$VER" ] && VER=$(just _pkg-version)
+    just _pkg packaging/nfpm-alpine-go.yaml aarch64 arm64 apk "$VER"
+
+# Build a .apk for the Go agent (linux/armhf — Raspberry Pi 2/3 32-bit).
+pkg-alpine-go-armhf ver="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just cross-agent-ble arm
+    VER="{{ver}}"; [ -z "$VER" ] && VER=$(just _pkg-version)
+    just _pkg packaging/nfpm-alpine-go.yaml armv7 arm apk "$VER"
+
+# Build .apk packages for the Go agent across all three architectures.
+pkg-alpine-go-all ver="": (pkg-alpine-go-amd64 ver) (pkg-alpine-go-arm64 ver) (pkg-alpine-go-armhf ver)
+
+# Build a .apk for the Rust agent (linux/amd64, static musl).
+pkg-alpine-rust-amd64 ver="": rust-docker-amd64
+    #!/usr/bin/env bash
+    set -euo pipefail
+    VER="{{ver}}"; [ -z "$VER" ] && VER=$(just _pkg-version)
+    just _pkg packaging/nfpm-alpine-rust.yaml x86_64 amd64 apk "$VER"
+
+# Build a .apk for the Rust agent (linux/arm64, static musl).
+pkg-alpine-rust-arm64 ver="": rust-docker-arm64
+    #!/usr/bin/env bash
+    set -euo pipefail
+    VER="{{ver}}"; [ -z "$VER" ] && VER=$(just _pkg-version)
+    just _pkg packaging/nfpm-alpine-rust.yaml aarch64 arm64 apk "$VER"
+
+# Build a .apk for the Rust agent (linux/armhf — Raspberry Pi 2/3 32-bit).
+pkg-alpine-rust-armhf ver="": rust-docker-armv7
+    #!/usr/bin/env bash
+    set -euo pipefail
+    VER="{{ver}}"; [ -z "$VER" ] && VER=$(just _pkg-version)
+    just _pkg packaging/nfpm-alpine-rust.yaml armv7 armv7 apk "$VER"
+
+# Build .apk packages for the Rust agent across all three architectures.
+pkg-alpine-rust-all ver="": (pkg-alpine-rust-amd64 ver) (pkg-alpine-rust-arm64 ver) (pkg-alpine-rust-armhf ver)
+
 # ---- web --------------------------------------------------------------------
 
 web-install:

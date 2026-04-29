@@ -1,0 +1,118 @@
+# nfpm configuration — ztp-agent (Go implementation), Alpine apk variant.
+#
+# Build a .apk for the Go-compiled ztp-agent binary on Alpine Linux.
+# Differs from packaging/nfpm-go.yaml in two ways:
+#   - no `depends: systemd` — Alpine uses OpenRC.
+#   - ships an OpenRC init script at /etc/init.d/ztp-agent
+#     (packaging/openrc/ztp-agent) instead of a systemd unit file.
+#   - Alpine-specific postinstall/preremove scripts (rc-update, rc-service).
+#
+# Required environment variables:
+#   VERSION    Package version
+#   NFPM_ARCH  Alpine architecture: x86_64 | aarch64 | armv7
+#              (mapped from the just-recipe arch by the workflow)
+#   BIN_ARCH   Suffix used in the cross-compiled binary filename
+#                amd64 → bin/ztp-agent-ble-linux-amd64
+#                arm64 → bin/ztp-agent-ble-linux-arm64
+#                arm   → bin/ztp-agent-ble-linux-arm   (armhf package)
+
+name:        "ztp-agent"
+arch:        "${NFPM_ARCH}"
+platform:    "linux"
+version:     "${VERSION}"
+section:     "admin"
+priority:    "optional"
+maintainer:  "thin-edge.io <info@thin-edge.io>"
+description: |
+  Zero-Touch Provisioning device agent (Go).
+
+  Enrolls this Linux device with a ZTP server, applies the returned
+  provisioning bundle (WiFi credentials, SSH keys, Cumulocity registration,
+  arbitrary files and hook scripts), and exits. On success the device is
+  fully provisioned; the unit will not run again until the provisioned
+  sentinel (/var/lib/ztp/provisioned) is removed.
+
+  Alpine variant: ships an OpenRC init script at /etc/init.d/ztp-agent.
+vendor:      "thin-edge.io"
+homepage:    "https://github.com/thin-edge/tedge-zerotouch-provisioning"
+license:     "Apache-2.0"
+
+contents:
+  # ── binary ──────────────────────────────────────────────────────────────
+  - src: "bin/ztp-agent-ble-linux-${BIN_ARCH}"
+    dst: /usr/bin/ztp-agent
+    file_info:
+      mode: 0755
+
+  # ── OpenRC init script ──────────────────────────────────────────────────
+  - src: packaging/openrc/ztp-agent
+    dst: /etc/init.d/ztp-agent
+    file_info:
+      mode: 0755
+
+  # ── operator config (preserved across upgrades) ─────────────────────────
+  - src: examples/agent.toml
+    dst: /etc/ztp/agent.toml
+    type: config|noreplace
+
+  # ── v2 applier scripts ───────────────────────────────────────────────────
+  - src: scripts/appliers/c8y.v2.sh
+    dst: /etc/ztp/appliers.d/c8y.v2.sh
+    type: config|noreplace
+    file_info:
+      mode: 0755
+
+  - src: scripts/appliers/files.v2.sh
+    dst: /etc/ztp/appliers.d/files.v2.sh
+    type: config|noreplace
+    file_info:
+      mode: 0755
+
+  - src: scripts/appliers/hook.v2.sh
+    dst: /etc/ztp/appliers.d/hook.v2.sh
+    type: config|noreplace
+    file_info:
+      mode: 0755
+
+  - src: scripts/appliers/ssh.authorized_keys.v2.sh
+    dst: /etc/ztp/appliers.d/ssh.authorized_keys.v2.sh
+    type: config|noreplace
+    file_info:
+      mode: 0755
+
+  - src: scripts/appliers/wifi.v2.sh
+    dst: /etc/ztp/appliers.d/wifi.v2.sh
+    type: config|noreplace
+    file_info:
+      mode: 0755
+
+  - src: scripts/appliers/passwd.v2.sh
+    dst: /etc/ztp/appliers.d/passwd.v2.sh
+    type: config|noreplace
+    file_info:
+      mode: 0755
+
+  # Shared INI parser library required by the v2 appliers.
+  - src: scripts/appliers/lib/ini.sh
+    dst: /etc/ztp/appliers.d/lib/ini.sh
+    type: config|noreplace
+    file_info:
+      mode: 0644
+
+  # ── runtime state directory ──────────────────────────────────────────────
+  - dst: /var/lib/ztp
+    type: dir
+    file_info:
+      mode: 0700
+      owner: root
+      group: root
+
+  # ── config directory ─────────────────────────────────────────────────────
+  - dst: /etc/ztp
+    type: dir
+    file_info:
+      mode: 0755
+
+scripts:
+  postinstall: packaging/scripts/postinstall-alpine.sh
+  preremove:   packaging/scripts/preremove-alpine.sh

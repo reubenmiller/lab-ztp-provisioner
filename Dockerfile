@@ -25,18 +25,24 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM --platform=$BUILDPLATFORM deps AS build
 ARG TARGETOS=linux
 ARG TARGETARCH
+# BuildKit sets TARGETVARIANT to "v6" / "v7" for linux/arm/v6 and linux/arm/v7,
+# and empty for arm64 / amd64. Strip the leading "v" to get a GOARM value.
+# Without this, GOARM defaults to 5 on linux/arm/v7 and binaries fail to run
+# on Pi 4 (which uses ARMv7 ABI).
+ARG TARGETVARIANT
 ARG VERSION=docker
 COPY . .
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    export GOARM="${TARGETVARIANT#v}" && \
+    GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOARM=${GOARM} \
     go build -ldflags "-s -w -X main.Version=${VERSION}" -o /out/ztp-server ./cmd/ztp-server && \
-    GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOARM=${GOARM} \
     go build -ldflags "-s -w -X main.Version=${VERSION}" -o /out/ztp-agent  ./cmd/ztp-agent && \
-    GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOARM=${GOARM} \
     go build -ldflags "-s -w -X main.Version=${VERSION}" -o /out/ztpctl     ./cmd/ztpctl && \
-    GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOARM=${GOARM} \
     go build -ldflags "-s -w -X main.Version=${VERSION}" -o /out/ztp-mdns-publish ./cmd/ztp-mdns-publish
 
 # -------------------------------------------------------------------- server -

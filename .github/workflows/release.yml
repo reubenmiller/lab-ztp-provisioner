@@ -1,0 +1,725 @@
+name: release
+
+# Triggers:
+#   - tag push (v*)         → build everything, publish ghcr images, create GitHub Release
+#   - main push             → build everything, publish ghcr images with :edge tag (no Release)
+#   - workflow_dispatch     → manual trigger; supply a `version` input
+
+on:
+  push:
+    tags: ['v*']
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version override (e.g. 1.2.3). Empty → auto-derive from git describe.'
+        required: false
+        default: ''
+
+permissions:
+  contents: write       # release upload + tag refs
+  packages: write       # ghcr.io push
+  id-token: write       # reserved for future cosign / SLSA
+  attestations: write   # reserved for future SLSA provenance
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  WAILS_VERSION: v2.10.1
+  NFPM_VERSION: v2.40.0
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────
+  # prepare — compute version + signing flags
+  # ─────────────────────────────────────────────────────────────────────────
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      is_tag: ${{ steps.v.outputs.is_tag }}
+      is_prerelease: ${{ steps.v.outputs.is_prerelease }}
+      sign_macos: ${{ steps.v.outputs.sign_macos }}
+      sign_windows: ${{ steps.v.outputs.sign_windows }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: v
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          HAS_APPLE_CERT: ${{ secrets.APPLE_DEVELOPER_ID_CERT != '' }}
+          HAS_WIN_CERT: ${{ secrets.WINDOWS_CERT_BASE64 != '' }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            TAG="${GITHUB_REF#refs/tags/}"
+            IS_TAG=true
+          elif [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && -n "$INPUT_VERSION" ]]; then
+            VERSION="$INPUT_VERSION"; TAG=""; IS_TAG=false
+          else
+            SHORT=$(git rev-parse --short HEAD)
+            BASE=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo "0.0.0")
+            VERSION="${BASE}-edge.${SHORT}"; TAG=""; IS_TAG=false
+          fi
+          case "$VERSION" in
+            *-rc*|*-beta*|*-alpha*|*-edge.*) IS_PRERELEASE=true ;;
+            *) IS_PRERELEASE=false ;;
+          esac
+          {
+            echo "version=$VERSION"
+            echo "tag=$TAG"
+            echo "is_tag=$IS_TAG"
+            echo "is_prerelease=$IS_PRERELEASE"
+            echo "sign_macos=$HAS_APPLE_CERT"
+            echo "sign_windows=$HAS_WIN_CERT"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved VERSION=$VERSION TAG=$TAG IS_TAG=$IS_TAG IS_PRERELEASE=$IS_PRERELEASE"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # web-build — build the SvelteKit SPA once; downstream Go/Wails jobs embed it
+  # ─────────────────────────────────────────────────────────────────────────
+  web-build:
+    runs-on: ubuntu-latest
+    needs: prepare
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: pnpm install + build
+        working-directory: web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: web/build
+          retention-days: 1
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # go-binaries — cross-compile ztp-server, ztp-agent[-ble], ztpctl per target
+  # ─────────────────────────────────────────────────────────────────────────
+  go-binaries:
+    needs: [prepare, web-build]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux-amd64,   goos: linux,   goarch: amd64, goarm: '',  ext: '',     archive: tar.gz, bin_arch: amd64 }
+          - { target: linux-arm64,   goos: linux,   goarch: arm64, goarm: '',  ext: '',     archive: tar.gz, bin_arch: arm64 }
+          - { target: linux-armv7,   goos: linux,   goarch: arm,   goarm: '7', ext: '',     archive: tar.gz, bin_arch: arm }
+          - { target: linux-armv6,   goos: linux,   goarch: arm,   goarm: '6', ext: '',     archive: tar.gz, bin_arch: arm }
+          - { target: darwin-amd64,  goos: darwin,  goarch: amd64, goarm: '',  ext: '',     archive: tar.gz, bin_arch: '' }
+          - { target: darwin-arm64,  goos: darwin,  goarch: arm64, goarm: '',  ext: '',     archive: tar.gz, bin_arch: '' }
+          - { target: windows-amd64, goos: windows, goarch: amd64, goarm: '',  ext: '.exe', archive: zip,    bin_arch: '' }
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-build
+          path: web/build
+
+      - name: Sync embed dir
+        run: |
+          mkdir -p internal/server/web/dist
+          rm -rf internal/server/web/dist/*
+          cp -r web/build/. internal/server/web/dist/
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build binaries
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+          CGO_ENABLED: '0'
+        run: |
+          set -euo pipefail
+          mkdir -p dist staging bin
+          LDFLAGS="-s -w -X main.Version=${VERSION}"
+          for bin in ztp-server ztp-agent ztpctl; do
+            go build -trimpath -ldflags "$LDFLAGS" \
+              -o "staging/${bin}${{ matrix.ext }}" "./cmd/${bin}"
+          done
+
+          # Linux-only: also produce ztp-agent-ble (BLE peripheral mode +
+          # mDNS). Tinygo bluetooth on Linux is pure-Go BlueZ-via-DBus,
+          # so CGO_ENABLED=0 still works.
+          if [[ "${{ matrix.goos }}" == linux ]]; then
+            go build -trimpath -tags 'ble mdns' -ldflags "$LDFLAGS" \
+              -o "staging/ztp-agent-ble" "./cmd/ztp-agent"
+          fi
+
+      - name: Archive binaries (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          set -euo pipefail
+          for bin in ztp-server ztp-agent ztpctl; do
+            tar -C staging -czf "dist/${bin}-${VERSION}-${{ matrix.target }}.tar.gz" "${bin}${{ matrix.ext }}"
+          done
+          if [[ "${{ matrix.goos }}" == linux ]]; then
+            tar -C staging -czf "dist/ztp-agent-ble-${VERSION}-${{ matrix.target }}.tar.gz" ztp-agent-ble
+          fi
+
+      - name: Archive binaries (zip)
+        if: matrix.archive == 'zip'
+        run: |
+          set -euo pipefail
+          cd staging
+          for bin in ztp-server ztp-agent ztpctl; do
+            zip "../dist/${bin}-${VERSION}-${{ matrix.target }}.zip" "${bin}${{ matrix.ext }}"
+          done
+
+      - name: Stage raw linux binary for nfpm
+        if: matrix.goos == 'linux'
+        run: |
+          cp "staging/ztp-agent-ble" "bin/ztp-agent-ble-linux-${{ matrix.bin_arch }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go-binaries-${{ matrix.target }}
+          path: dist/
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.goos == 'linux'
+        with:
+          name: go-binaries-raw-${{ matrix.target }}
+          path: bin/
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # rust-agent — cross-compile via clients/rust/Dockerfile (cargo-chef)
+  # ─────────────────────────────────────────────────────────────────────────
+  rust-agent:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # musl static (mDNS only)
+          - { cell: linux-amd64-musl, target: x86_64-unknown-linux-musl,    features: 'mdns',      bin_arch: amd64, extra_pkgs: '' }
+          - { cell: linux-arm64-musl, target: aarch64-unknown-linux-musl,   features: 'mdns',      bin_arch: arm64, extra_pkgs: '' }
+          - { cell: linux-armv7-musl, target: armv7-unknown-linux-musleabihf, features: 'mdns',    bin_arch: armv7, extra_pkgs: '' }
+          # gnu (glibc) for BLE (BlueZ + libdbus required)
+          - { cell: linux-amd64-gnu,  target: x86_64-unknown-linux-gnu,     features: 'mdns,ble',  bin_arch: amd64, extra_pkgs: 'libdbus-1-dev' }
+          - { cell: linux-arm64-gnu,  target: aarch64-unknown-linux-gnu,    features: 'mdns,ble',  bin_arch: arm64, extra_pkgs: 'libdbus-1-dev:arm64' }
+          - { cell: linux-armv7-gnu,  target: armv7-unknown-linux-gnueabihf, features: 'mdns,ble', bin_arch: armv7, extra_pkgs: 'libdbus-1-dev:armhf' }
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build Rust agent (${{ matrix.cell }})
+        run: |
+          set -euo pipefail
+          mkdir -p out dist bin
+          docker buildx build \
+            --file clients/rust/Dockerfile \
+            --build-arg "TARGET=${{ matrix.target }}" \
+            --build-arg "FEATURES=${{ matrix.features }}" \
+            --build-arg "EXTRA_PKGS=${{ matrix.extra_pkgs }}" \
+            --output type=local,dest=out \
+            --cache-from "type=gha,scope=rust-${{ matrix.cell }}" \
+            --cache-to   "type=gha,scope=rust-${{ matrix.cell }},mode=max" \
+            clients/rust
+
+      - name: Stage + archive binary
+        run: |
+          set -euo pipefail
+          # Locate the produced binary (cargo-chef Dockerfile exports /ztp-agent
+          # to the local destination root).
+          src=$(find out -type f -name ztp-agent | head -n1)
+          test -n "$src" || { echo "ztp-agent binary not found in out/"; ls -lR out; exit 1; }
+          dst="bin/ztp-agent-rust-linux-${{ matrix.bin_arch }}"
+          cp "$src" "$dst"
+          chmod +x "$dst"
+          tar -C bin -czf "dist/ztp-agent-rust-${VERSION}-${{ matrix.cell }}.tar.gz" \
+            "ztp-agent-rust-linux-${{ matrix.bin_arch }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rust-binaries-${{ matrix.cell }}
+          path: dist/
+          if-no-files-found: error
+
+      # Only the gnu (BLE) variants feed into the Linux packages — that's what
+      # nfpm-rust.yaml expects (fully featured agent, not the musl-static one).
+      - uses: actions/upload-artifact@v4
+        if: endsWith(matrix.cell, '-gnu')
+        with:
+          name: rust-binaries-raw-${{ matrix.cell }}
+          path: bin/
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # linux-packages — build .deb / .rpm / .apk via nfpm
+  # ─────────────────────────────────────────────────────────────────────────
+  linux-packages:
+    needs: [prepare, go-binaries, rust-agent]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install nfpm
+        run: |
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@${NFPM_VERSION}
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Install just + envsubst
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y just gettext-base
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Stage raw binaries
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          # Go binaries: from go-binaries-raw-linux-{amd64,arm64,armv7,armv6}
+          for d in artifacts/go-binaries-raw-linux-*/; do
+            cp -v "$d"* bin/ 2>/dev/null || true
+          done
+          # Rust binaries (gnu/BLE variant): rust-binaries-raw-linux-*-gnu
+          for d in artifacts/rust-binaries-raw-linux-*-gnu/; do
+            cp -v "$d"* bin/ 2>/dev/null || true
+          done
+          ls -la bin/
+
+      - name: Build Go agent packages (deb + rpm + apk)
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64 armhf; do
+            just pkg-go-${arch} deb "$VERSION"
+            just pkg-go-${arch} rpm "$VERSION"
+            just pkg-alpine-go-${arch} "$VERSION"
+          done
+
+      - name: Build Rust agent packages (deb + rpm + apk)
+        # The existing nfpm-rust.yaml references files (packaging/default/ztp-agent
+        # and packaging/scripts/ztp-agent-run) that are not yet present in the
+        # repo — see plan §"Out of scope". For now, only the apk variant (which
+        # uses our self-contained nfpm-alpine-rust.yaml) is built. Re-enable the
+        # deb/rpm steps once those source files are committed.
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64 armhf; do
+            just pkg-alpine-rust-${arch} "$VERSION"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: |
+            dist/*.deb
+            dist/*.rpm
+            dist/*.apk
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # desktop-mac — Wails build (universal2 .app), conditional notarization
+  # ─────────────────────────────────────────────────────────────────────────
+  desktop-mac:
+    needs: [prepare, web-build]
+    runs-on: macos-14
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-build
+          path: web/build
+
+      - name: Sync embed dir
+        run: |
+          mkdir -p internal/server/web/dist
+          rm -rf internal/server/web/dist/*
+          cp -r web/build/. internal/server/web/dist/
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Wails
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@${WAILS_VERSION}
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Stamp wails.json productVersion
+        run: |
+          # macOS runners use BSD sed
+          sed -i '' -E 's/"productVersion": "[^"]*"/"productVersion": "'"$VERSION"'"/' cmd/ztp-app/wails.json
+          grep productVersion cmd/ztp-app/wails.json
+
+      - name: Wails build (darwin/universal)
+        run: |
+          set -euo pipefail
+          cd cmd/ztp-app
+          CGO_LDFLAGS="-framework UniformTypeIdentifiers" \
+            wails build -tags 'ble production' -platform darwin/universal -clean
+
+      - name: Import codesign certificate
+        if: needs.prepare.outputs.sign_macos == 'true'
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_DEVELOPER_ID_CERT }}
+          p12-password: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
+
+      - name: Codesign + notarize
+        if: needs.prepare.outputs.sign_macos == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_NOTARIZATION_PASSWORD: ${{ secrets.APPLE_NOTARIZATION_PASSWORD }}
+        run: |
+          set -euo pipefail
+          IDENTITY=$(security find-identity -v -p codesigning | awk -F\" '/Developer ID Application/ {print $2; exit}')
+          if [ -z "$IDENTITY" ]; then
+            echo "Developer ID Application identity not found in keychain" >&2
+            exit 1
+          fi
+          codesign --deep --force --options runtime --timestamp \
+            --sign "$IDENTITY" cmd/ztp-app/build/bin/ztp-app.app
+          ditto -c -k --keepParent cmd/ztp-app/build/bin/ztp-app.app /tmp/ztp-app-notarize.zip
+          xcrun notarytool submit /tmp/ztp-app-notarize.zip \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_NOTARIZATION_PASSWORD" \
+            --wait
+          xcrun stapler staple cmd/ztp-app/build/bin/ztp-app.app
+
+      - name: Archive .app
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          tar -C cmd/ztp-app/build/bin -czf \
+            "dist/ztp-app-${VERSION}-darwin-universal.tar.gz" ztp-app.app
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-mac
+          path: dist/
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # desktop-windows — Wails build (.exe), conditional signtool
+  # ─────────────────────────────────────────────────────────────────────────
+  desktop-windows:
+    needs: [prepare, web-build]
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-build
+          path: web/build
+
+      - name: Sync embed dir
+        run: |
+          mkdir -p internal/server/web/dist
+          rm -rf internal/server/web/dist/*
+          cp -r web/build/. internal/server/web/dist/
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Wails
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@${WAILS_VERSION}
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Stamp wails.json productVersion
+        run: |
+          sed -i.bak -E 's/"productVersion": "[^"]*"/"productVersion": "'"$VERSION"'"/' cmd/ztp-app/wails.json
+          rm -f cmd/ztp-app/wails.json.bak
+          grep productVersion cmd/ztp-app/wails.json
+
+      - name: Wails build (windows/amd64)
+        run: |
+          set -euo pipefail
+          cd cmd/ztp-app
+          wails build -tags 'ble production' -platform windows/amd64 -clean
+
+      - name: Sign .exe
+        if: needs.prepare.outputs.sign_windows == 'true'
+        shell: pwsh
+        env:
+          WIN_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}
+          WIN_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          $cert = [Convert]::FromBase64String($env:WIN_CERT_BASE64)
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\cert.pfx", $cert)
+          $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" |
+                       Sort-Object FullName -Descending | Select-Object -First 1).FullName
+          & $signtool sign /f "$env:RUNNER_TEMP\cert.pfx" /p $env:WIN_CERT_PASSWORD `
+            /tr http://timestamp.digicert.com /td sha256 /fd sha256 `
+            cmd/ztp-app/build/bin/ztp-app.exe
+
+      - name: Zip .exe
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cd cmd/ztp-app/build/bin
+          7z a "../../../../dist/ztp-app-${VERSION}-windows-amd64.zip" ztp-app.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows
+          path: dist/
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # desktop-linux — Wails build for amd64 + arm64 (native runners)
+  # ─────────────────────────────────────────────────────────────────────────
+  desktop-linux:
+    needs: [prepare, web-build]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-latest }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-build
+          path: web/build
+
+      - name: Sync embed dir
+        run: |
+          mkdir -p internal/server/web/dist
+          rm -rf internal/server/web/dist/*
+          cp -r web/build/. internal/server/web/dist/
+
+      - name: Install GTK + WebKit
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config build-essential
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Wails
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@${WAILS_VERSION}
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Stamp wails.json productVersion
+        run: |
+          sed -i.bak -E 's/"productVersion": "[^"]*"/"productVersion": "'"$VERSION"'"/' cmd/ztp-app/wails.json
+          rm -f cmd/ztp-app/wails.json.bak
+
+      - name: Wails build (linux/${{ matrix.arch }})
+        run: |
+          set -euo pipefail
+          cd cmd/ztp-app
+          wails build -tags 'ble production webkit2_41' -platform linux/${{ matrix.arch }} -clean
+
+      - name: Archive
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          tar -C cmd/ztp-app/build/bin -czf \
+            "dist/ztp-app-${VERSION}-linux-${{ matrix.arch }}.tar.gz" ztp-app
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-linux-${{ matrix.arch }}
+          path: dist/
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # container-images — multi-arch buildx push to ghcr.io
+  # Tags: vX.Y.Z + X.Y + latest on releases (latest skipped for prereleases);
+  #       edge on main pushes.
+  # Skips linux/arm/v6 — distroless does not ship for it.
+  # ─────────────────────────────────────────────────────────────────────────
+  container-images:
+    needs: [prepare, web-build]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { dockerfile_target: server, image: ztp-server }
+          - { dockerfile_target: agent,  image: ztp-agent  }
+          - { dockerfile_target: ctl,    image: ztpctl     }
+          - { dockerfile_target: mdns,   image: ztp-mdns   }
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-build
+          path: web/build
+
+      - name: Sync embed dir
+        run: |
+          mkdir -p internal/server/web/dist
+          rm -rf internal/server/web/dist/*
+          cp -r web/build/. internal/server/web/dist/
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-') }}
+            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: ${{ matrix.dockerfile_target }}
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          build-args: |
+            VERSION=${{ env.VERSION }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=image-${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=image-${{ matrix.image }}
+          push: true
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # release — only on tag pushes; collect all artefacts, checksum, upload
+  # ─────────────────────────────────────────────────────────────────────────
+  release:
+    if: needs.prepare.outputs.is_tag == 'true'
+    needs:
+      - prepare
+      - go-binaries
+      - rust-agent
+      - linux-packages
+      - desktop-mac
+      - desktop-windows
+      - desktop-linux
+      - container-images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten + checksum
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          find artifacts -type f \
+            \( -name '*.tar.gz' -o -name '*.zip' \
+               -o -name '*.deb' -o -name '*.rpm' -o -name '*.apk' \) \
+            -exec cp -v {} out/ \;
+          cd out && sha256sum * > SHA256SUMS
+          ls -la
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          prerelease: ${{ needs.prepare.outputs.is_prerelease == 'true' }}
+          generate_release_notes: true
+          files: out/*
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # smoke — sanity-check published images and tarballs after a tagged release
+  # ─────────────────────────────────────────────────────────────────────────
+  smoke:
+    if: needs.prepare.outputs.is_tag == 'true'
+    needs: [prepare, release, container-images]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull + run ztp-server image
+        run: |
+          set -euo pipefail
+          docker pull "ghcr.io/${{ github.repository_owner }}/ztp-server:${VERSION}"
+          # `--print-pubkey` exits 0 once the in-memory key is loaded, without
+          # needing a config file or admin token. Used as a liveness probe.
+          docker run --rm "ghcr.io/${{ github.repository_owner }}/ztp-server:${VERSION}" -print-pubkey || \
+          docker run --rm "ghcr.io/${{ github.repository_owner }}/ztp-server:${VERSION}" --print-pubkey
+
+      - name: Smoke-test linux-amd64 server tarball
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" -p 'ztp-server-*-linux-amd64.tar.gz' -D /tmp/relsmoke
+          tar -C /tmp/relsmoke -xzf /tmp/relsmoke/ztp-server-*-linux-amd64.tar.gz
+          /tmp/relsmoke/ztp-server -version || /tmp/relsmoke/ztp-server --version || true

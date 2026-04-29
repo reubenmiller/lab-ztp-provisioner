@@ -1,0 +1,108 @@
+# tedge-zerotouch-provisioning — deploy from prebuilt ghcr.io images.
+#
+# Companion to docker-compose.yaml that pulls published images instead of
+# building from source. Service names + env keys are identical so users can
+# swap files in (`docker compose -f deploy/docker-compose.ghcr.yaml up -d`).
+#
+# Pin the version with ZTP_VERSION in deploy/.env (or env-passthrough):
+#   ZTP_VERSION=1.2.3            # production
+#   ZTP_VERSION=edge             # rolling main builds
+#   ZTP_VERSION=latest           # latest non-prerelease tag (default)
+#
+# The owner segment defaults to thin-edge but is overridable via
+# GITHUB_REPOSITORY_OWNER for forks / self-hosted builds.
+#
+# To deploy publicly: change ZTP_SITE_ADDRESS and ZTP_TLS_EMAIL in .env to
+# your domain + ops email. Caddy will fetch a real Let's Encrypt cert.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: ztp-caddy
+    restart: unless-stopped
+    ports:
+      - "${ZTP_HTTPS_PORT:-8443}:443"
+    environment:
+      - ZTP_SITE_ADDRESS=${ZTP_SITE_ADDRESS:-localhost}
+      - ZTP_TLS_EMAIL=${ZTP_TLS_EMAIL:-internal}
+    volumes:
+      - ${ZTP_CADDYFILE:-./Caddyfile}:/etc/caddy/Caddyfile:ro
+      - ./certs:/certs:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      default:
+        aliases:
+          - ztp
+    depends_on:
+      - server
+
+  server:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-thin-edge}/ztp-server:${ZTP_VERSION:-latest}
+    container_name: ztp-server
+    restart: unless-stopped
+    # NOTE: deliberately no `ports:` — server is reachable only via Caddy.
+    volumes:
+      - ./data:/var/lib/ztp
+      - ./config/ztp-server.yaml:/etc/ztp/ztp-server.yaml:ro
+      - ./profiles.d:/etc/ztp/profiles.d:ro
+    environment:
+      - ZTP_LOG=${ZTP_LOG:-info}
+      # The admin token is REQUIRED. Generate one (e.g. `openssl rand -hex 32`)
+      # and place it in deploy/.env — the server refuses to start without it.
+      - ZTP_ADMIN_TOKEN
+      - C8Y_BASEURL=${C8Y_BASEURL:-${C8Y_HOST:-${C8Y_URL:-}}}
+      - C8Y_TENANT=${C8Y_TENANT:-}
+      - C8Y_TOKEN=${C8Y_TOKEN:-}
+      - C8Y_USER=${C8Y_USER:-}
+      - C8Y_USERNAME=${C8Y_USERNAME:-}
+      - C8Y_PASSWORD=${C8Y_PASSWORD:-}
+
+  device:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-thin-edge}/ztp-agent:${ZTP_VERSION:-latest}
+    container_name: ztp-device-demo
+    profiles: ["demo"]
+    environment:
+      - ZTP_DEVICE_ID=${ZTP_DEVICE_ID:-demo-device-1}
+    volumes:
+      - ./data:/var/lib/ztp-server:ro
+      - device_identity:/var/lib/ztp
+      - caddy_data:/shared/caddy-ca:ro
+    depends_on:
+      - caddy
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        for i in $$(seq 1 60); do
+          [ -f /var/lib/ztp-server/signing.key.pub ] && \
+          [ -f /shared/caddy-ca/caddy/pki/authorities/local/root.crt ] && break
+          echo "waiting for server pubkey + caddy CA..."
+          sleep 1
+        done
+        exec /usr/local/bin/ztp-agent \
+          -server https://ztp \
+          -ca /shared/caddy-ca/caddy/pki/authorities/local/root.crt \
+          -server-pubkey "$$(cat /var/lib/ztp-server/signing.key.pub)" \
+          -device-id "$$ZTP_DEVICE_ID" \
+          -identity /var/lib/ztp/identity.key \
+          -appliers /etc/ztp/appliers.d \
+          -v
+
+  mdns:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-thin-edge}/ztp-mdns:${ZTP_VERSION:-latest}
+    container_name: ztp-mdns
+    profiles: ["mdns"]
+    network_mode: host
+    restart: unless-stopped
+    command:
+      - -service=_ztp._tcp
+      - -port=${ZTP_HTTPS_PORT:-8443}
+      - -server-url=https://${ZTP_SITE_ADDRESS:-localhost}:${ZTP_HTTPS_PORT:-8443}
+    depends_on:
+      - caddy
+
+volumes:
+  caddy_data:
+  caddy_config:
+  device_identity:
