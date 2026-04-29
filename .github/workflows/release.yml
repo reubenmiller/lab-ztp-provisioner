@@ -221,48 +221,70 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # musl static (mDNS only)
-          - { cell: linux-amd64-musl, target: x86_64-unknown-linux-musl,    features: 'mdns',      bin_arch: amd64, extra_pkgs: '' }
-          - { cell: linux-arm64-musl, target: aarch64-unknown-linux-musl,   features: 'mdns',      bin_arch: arm64, extra_pkgs: '' }
-          - { cell: linux-armv7-musl, target: armv7-unknown-linux-musleabihf, features: 'mdns',    bin_arch: armv7, extra_pkgs: '' }
-          # gnu (glibc) for BLE (BlueZ + libdbus required)
-          - { cell: linux-amd64-gnu,  target: x86_64-unknown-linux-gnu,     features: 'mdns,ble',  bin_arch: amd64, extra_pkgs: 'libdbus-1-dev' }
-          - { cell: linux-arm64-gnu,  target: aarch64-unknown-linux-gnu,    features: 'mdns,ble',  bin_arch: arm64, extra_pkgs: 'libdbus-1-dev:arm64' }
-          - { cell: linux-armv7-gnu,  target: armv7-unknown-linux-gnueabihf, features: 'mdns,ble', bin_arch: armv7, extra_pkgs: 'libdbus-1-dev:armhf' }
+          # musl static (mDNS only). cargo-zigbuild + zig handles musl libc and
+          # ring's C bits without needing a separate musl cross-toolchain.
+          - { cell: linux-amd64-musl, target: x86_64-unknown-linux-musl,      features: 'mdns',     bin_arch: amd64, dpkg_arch: '' }
+          - { cell: linux-arm64-musl, target: aarch64-unknown-linux-musl,     features: 'mdns',     bin_arch: arm64, dpkg_arch: '' }
+          - { cell: linux-armv7-musl, target: armv7-unknown-linux-musleabihf, features: 'mdns',     bin_arch: armv7, dpkg_arch: '' }
+          # gnu (glibc) for BLE — needs libdbus-1-dev for the target arch.
+          - { cell: linux-amd64-gnu,  target: x86_64-unknown-linux-gnu,       features: 'mdns,ble', bin_arch: amd64, dpkg_arch: 'amd64' }
+          - { cell: linux-arm64-gnu,  target: aarch64-unknown-linux-gnu,      features: 'mdns,ble', bin_arch: arm64, dpkg_arch: 'arm64' }
+          - { cell: linux-armv7-gnu,  target: armv7-unknown-linux-gnueabihf,  features: 'mdns,ble', bin_arch: armv7, dpkg_arch: 'armhf' }
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - uses: actions/checkout@v6
 
-      - uses: docker/setup-qemu-action@v4
-      - uses: docker/setup-buildx-action@v4
+      # Cross-compile via cargo-zigbuild — zig provides the C compiler + libc
+      # for every target (musl and glibc), so ring/cc-rs builds cleanly without
+      # the musl/glibc header mismatch that breaks gcc-cross-only Docker images.
+      - uses: dtolnay/rust-toolchain@stable
 
-      - name: Build Rust agent (${{ matrix.cell }})
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients/rust
+          shared-key: rust-${{ matrix.cell }}
+
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
+
+      - name: Install cargo-zigbuild
+        run: cargo install --locked cargo-zigbuild
+
+      - name: Install libdbus dev for BLE/gnu cell
+        if: contains(matrix.features, 'ble')
+        env:
+          DPKG_ARCH: ${{ matrix.dpkg_arch }}
         run: |
           set -euo pipefail
-          mkdir -p out dist bin
-          # The Dockerfile does `COPY clients/rust/ .` so the build context
-          # must be the repo root (matches `just _rust-docker`).
-          # `--target output` selects the scratch stage that contains only
-          # the ztp-agent binary, suitable for `--output type=local`.
-          docker buildx build \
-            --file clients/rust/Dockerfile \
-            --target output \
-            --build-arg "TARGET=${{ matrix.target }}" \
-            --build-arg "FEATURES=${{ matrix.features }}" \
-            --build-arg "EXTRA_PKGS=${{ matrix.extra_pkgs }}" \
-            --output type=local,dest=out \
-            --cache-from "type=gha,scope=rust-${{ matrix.cell }}" \
-            --cache-to   "type=gha,scope=rust-${{ matrix.cell }},mode=max" \
-            .
+          if [[ "$DPKG_ARCH" != "amd64" ]]; then
+            sudo dpkg --add-architecture "$DPKG_ARCH"
+          fi
+          sudo apt-get update
+          if [[ "$DPKG_ARCH" == "amd64" ]]; then
+            sudo apt-get install -y libdbus-1-dev pkg-config
+          else
+            sudo apt-get install -y "libdbus-1-dev:$DPKG_ARCH" pkg-config
+          fi
+
+      - name: cargo zigbuild
+        working-directory: clients/rust
+        env:
+          # libdbus is glibc-only; the bluer crate's pkg-config lookup must be
+          # allowed across architectures and pointed at the cross-arch .pc files.
+          PKG_CONFIG_ALLOW_CROSS: '1'
+          PKG_CONFIG_PATH: ${{ matrix.dpkg_arch == 'amd64' && '/usr/lib/x86_64-linux-gnu/pkgconfig' || matrix.dpkg_arch == 'arm64' && '/usr/lib/aarch64-linux-gnu/pkgconfig' || matrix.dpkg_arch == 'armhf' && '/usr/lib/arm-linux-gnueabihf/pkgconfig' || '' }}
+        run: |
+          set -euo pipefail
+          cargo zigbuild --release --target "${{ matrix.target }}" --features "${{ matrix.features }}"
 
       - name: Stage + archive binary
         run: |
           set -euo pipefail
-          # Locate the produced binary (cargo-chef Dockerfile exports /ztp-agent
-          # to the local destination root).
-          src=$(find out -type f -name ztp-agent | head -n1)
-          test -n "$src" || { echo "ztp-agent binary not found in out/"; ls -lR out; exit 1; }
+          mkdir -p dist bin
+          src="clients/rust/target/${{ matrix.target }}/release/ztp-agent"
+          test -f "$src" || { echo "ztp-agent binary not found at $src"; ls -lR clients/rust/target/${{ matrix.target }}/release/ || true; exit 1; }
           dst="bin/ztp-agent-rust-linux-${{ matrix.bin_arch }}"
           cp "$src" "$dst"
           chmod +x "$dst"
