@@ -18,7 +18,11 @@
 .DS_Store
 /web/.pnpm-store/
 clients/rust/target/
-cmd/ztp-app/build/
+cmd/ztp-app/build/bin/
+cmd/ztp-app/build/darwin/build/
+cmd/ztp-app/build/windows/installer/
+# Track source assets (appicon.png/svg + Wails-generated build resources)
+# but ignore Wails' compiled outputs.
 
 # Generated cross-language test vectors (contain synthetic keys that trip secret scanners).
 # Regenerated automatically by `go test ./pkg/protocol` and by the Rust build.rs.

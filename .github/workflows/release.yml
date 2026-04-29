@@ -241,15 +241,20 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p out dist bin
+          # The Dockerfile does `COPY clients/rust/ .` so the build context
+          # must be the repo root (matches `just _rust-docker`).
+          # `--target output` selects the scratch stage that contains only
+          # the ztp-agent binary, suitable for `--output type=local`.
           docker buildx build \
             --file clients/rust/Dockerfile \
+            --target output \
             --build-arg "TARGET=${{ matrix.target }}" \
             --build-arg "FEATURES=${{ matrix.features }}" \
             --build-arg "EXTRA_PKGS=${{ matrix.extra_pkgs }}" \
             --output type=local,dest=out \
             --cache-from "type=gha,scope=rust-${{ matrix.cell }}" \
             --cache-to   "type=gha,scope=rust-${{ matrix.cell }},mode=max" \
-            clients/rust
+            .
 
       - name: Stage + archive binary
         run: |
