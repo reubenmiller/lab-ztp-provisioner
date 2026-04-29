@@ -317,22 +317,32 @@ func Enroll(ctx context.Context, scanTimeout time.Duration, progress ProgressFn,
 	if err != nil || len(svcs) == 0 {
 		return nil, fmt.Errorf("discover service: %w", err)
 	}
-	// Discover by explicit UUID list rather than nil-for-everything.
-	// On Windows WinRT this routes to GetCharacteristicsForUuidAsync
-	// which reliably returns the requested characteristic objects;
-	// the unfiltered GetCharacteristicsAsync path has been observed
-	// to return an empty/incomplete list against BlueZ peripherals
-	// even after a successful service-discovery round-trip. We name
-	// every characteristic the protocol uses (Request, Response,
-	// Status, TimeSync) so a single GATT round-trip surfaces them
-	// all.
+	// Characteristic discovery is split into "required" and
+	// "optional" passes because tinygo's filtered DiscoverCharacteristics
+	// returns "did not find all requested" if ANY UUID in the list is
+	// missing, even when the others are present. Doing one strict
+	// call for the protocol-mandatory pair (request + response) and a
+	// separate best-effort call for the optional TimeSync surfaces a
+	// useful diagnostic on the few that matter and silently degrades
+	// on the one that doesn't. The Status characteristic is exposed by
+	// the peripheral but not consumed by Enroll's flow, so we don't
+	// discover it here at all.
 	reqUUID := parseUUID(RequestUUID)
 	respUUID := parseUUID(ResponseUUID)
-	statUUID := parseUUID(StatusUUID)
 	tsUUID := parseUUID(TimeSyncUUID)
-	chars, err := svcs[0].DiscoverCharacteristics([]bluetooth.UUID{reqUUID, respUUID, statUUID, tsUUID})
+	chars, err := svcs[0].DiscoverCharacteristics([]bluetooth.UUID{reqUUID, respUUID})
 	if err != nil {
-		return nil, fmt.Errorf("discover chars: %w", err)
+		// Fallback: enumerate every characteristic on the service so
+		// we can tell the operator exactly what was found. WinRT's
+		// unfiltered GetCharacteristicsAsync can be flaky against
+		// BlueZ peripherals, but when the filtered call has already
+		// failed we have nothing to lose.
+		slog.Debug("ble: filtered discovery failed; trying unfiltered fallback", "err", err)
+		all, fallbackErr := svcs[0].DiscoverCharacteristics(nil)
+		if fallbackErr != nil {
+			return nil, fmt.Errorf("discover chars: %w (unfiltered fallback also failed: %v)", err, fallbackErr)
+		}
+		chars = all
 	}
 	var reqCh, respCh, timeSyncCh *bluetooth.DeviceCharacteristic
 	seenUUIDs := make([]string, 0, len(chars))
@@ -356,16 +366,26 @@ func Enroll(ctx context.Context, scanTimeout time.Duration, progress ProgressFn,
 			timeSyncCh = &c
 		}
 	}
-	slog.Debug("ble: characteristics discovered",
-		"count", len(chars),
-		"uuids", seenUUIDs,
-		"request_found", reqCh != nil,
-		"response_found", respCh != nil,
-		"timesync_found", timeSyncCh != nil)
 	if reqCh == nil || respCh == nil {
 		return nil, fmt.Errorf("device missing required ZTP characteristics (discovered %d: %v; need request=%s, response=%s)",
 			len(chars), seenUUIDs, RequestUUID, ResponseUUID)
 	}
+	// TimeSync is a separate, best-effort discovery — older devices
+	// don't expose it, and bundling it into the required-pass would
+	// fail the whole enrollment for a feature that's only used to
+	// nudge the device's clock before the envelope is signed.
+	if timeSyncCh == nil {
+		if tsChars, err := svcs[0].DiscoverCharacteristics([]bluetooth.UUID{tsUUID}); err == nil && len(tsChars) > 0 {
+			c := tsChars[0]
+			timeSyncCh = &c
+		}
+	}
+	slog.Debug("ble: characteristics resolved",
+		"discovered_in_first_pass", len(chars),
+		"uuids", seenUUIDs,
+		"request_found", reqCh != nil,
+		"response_found", respCh != nil,
+		"timesync_found", timeSyncCh != nil)
 
 	// Best-effort time sync. Older devices may not advertise the
 	// characteristic; silently skip.
