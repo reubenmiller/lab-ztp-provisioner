@@ -305,6 +305,11 @@ func Enroll(ctx context.Context, scanTimeout time.Duration, progress ProgressFn,
 		return nil, scanTimeoutError(atomic.LoadInt64(&advertCount), scanErr, scanTimeout)
 	case sr = <-devCh:
 	}
+	// Stop the periodic "scanning…" emitter as soon as we have a hit.
+	// Otherwise it keeps firing through connect / service discovery
+	// and the UI shows the misleading "scanning" status interleaved
+	// with later phase events.
+	tickCancel()
 
 	conn, err := adapter.Connect(sr.Address, bluetooth.ConnectionParams{})
 	if err != nil {
@@ -313,9 +318,32 @@ func Enroll(ctx context.Context, scanTimeout time.Duration, progress ProgressFn,
 	defer conn.Disconnect()
 	emit(PhaseConnected, deviceLabel(sr))
 
-	svcs, err := conn.DiscoverServices([]bluetooth.UUID{target})
+	// Service discovery is retried because WinRT's
+	// BluetoothLEDevice.GetGattServicesAsync returns "async operation
+	// failed with status 2" when the GATT attribute cache hasn't
+	// populated yet — common when a fresh connection's service
+	// enumeration races the OS's caching. A 250ms delay between
+	// attempts gives Windows time to fill the cache; three tries
+	// covers the typical failure window without making genuinely
+	// broken peripherals hang for long.
+	var svcs []bluetooth.DeviceService
+	for attempt := 1; attempt <= 3; attempt++ {
+		svcs, err = conn.DiscoverServices([]bluetooth.UUID{target})
+		if err == nil && len(svcs) > 0 {
+			break
+		}
+		slog.Debug("ble: service discovery attempt failed",
+			"attempt", attempt, "err", err, "services", len(svcs))
+		if attempt < 3 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(250 * time.Millisecond):
+			}
+		}
+	}
 	if err != nil || len(svcs) == 0 {
-		return nil, fmt.Errorf("discover service: %w", err)
+		return nil, fmt.Errorf("discover service after retries: %w", err)
 	}
 	// Characteristic discovery is split into "required" and
 	// "optional" passes because tinygo's filtered DiscoverCharacteristics
