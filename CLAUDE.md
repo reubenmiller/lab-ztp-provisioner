@@ -20,6 +20,8 @@ All routine tasks are wired through [justfile](justfile). `just` with no arg lis
 | Tail one service's logs | `just logs server` (or `device`, `device-shell`, `web`, `caddy`) |
 | Spawn an extra fresh device against the running stack | `just device <id>` (Go agent) / `just device-shell <id>` (POSIX) |
 | BLE-tagged agent build (`-tags ble`) | `just agent-ble` (host) / `just cross-agent-ble [arch]` (linux cross) |
+| Desktop app — full packaged build (`cmd/ztp-app/build/bin/ztp-app.app` on macOS) | `just app-bundle` |
+| Desktop app — fast dev loop (bundles once, then fast Go-only rebuilds) | `just app-build` then `just app-dev` |
 | Web SPA dev server (HMR, proxies `/v1/*` to backend) | `just web-dev` |
 | Web SPA install / production build | `just web-install` / `just web-build` |
 | Rust agent (host, debug) | `just rust-agent` |

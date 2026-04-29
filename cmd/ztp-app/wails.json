@@ -4,7 +4,7 @@
   "outputfilename": "ztp-app",
   "frontend:dir": "../../web",
   "frontend:install": "pnpm install --frozen-lockfile",
-  "frontend:build": "pnpm build && cd ../.. && just web-embed-sync",
+  "frontend:build": "just web-build",
   "frontend:dev:watcher": "pnpm dev --port 5175",
   "frontend:dev:serverUrl": "http://localhost:5175",
   "info": {

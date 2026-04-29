@@ -18,6 +18,7 @@
 .DS_Store
 /web/.pnpm-store/
 clients/rust/target/
+cmd/ztp-app/build/
 
 # Generated cross-language test vectors (contain synthetic keys that trip secret scanners).
 # Regenerated automatically by `go test ./pkg/protocol` and by the Rust build.rs.

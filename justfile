@@ -346,43 +346,75 @@ web-build:
 
 # ---- desktop app (Wails) ----------------------------------------------------
 
-# Build the Wails desktop binary. CGO is required (macOS WebKit /
-# Linux WebKitGTK / Windows WebView2). Run `just web-build` first if
-# you want the embedded SPA up to date.
+# Build a fully-packaged app using the wails CLI. Handles icon conversion,
+# platform bundle structure, and resource embedding automatically.
 #
-# Build tags:
-#   - `production` — selects Wails' production app driver. Without it,
-#     the binary panics at startup with "Wails applications will not
-#     build without the correct build tags."
+# Output (relative to project root):
+#   macOS   → build/bin/ztp-app.app  — proper .app bundle; icon appears in
+#             Dock and Cmd+Tab task-switcher (read from iconfile.icns inside
+#             the bundle, generated from build/appicon.png).
+#   Windows → build/bin/ztp-app.exe  — icon embedded in PE resource section.
+#   Linux   → build/bin/ztp-app      — GTK window icon set at runtime from
+#             the embedded PNG; add a .desktop file for launcher icon.
 #
-# CGO_LDFLAGS:
-#   - macOS 14+ Wails uses UTType from UniformTypeIdentifiers; the
-#     framework isn't auto-linked by the Wails cgo directives, so we
-#     add it here. Harmless on Linux/Windows because CGO_LDFLAGS only
-#     applies to the host build.
-app-build:
-    CGO_ENABLED=1 CGO_LDFLAGS="-framework UniformTypeIdentifiers" {{go}} build {{goflags}} -tags 'production ble' -o {{bin_dir}}/ztp-app ./cmd/ztp-app
+# Prerequisites:
+#   wails CLI  — go install github.com/wailsapp/wails/v2/cmd/wails@latest
+#   macOS      — Xcode CLT (xcode-select --install)
+#   Linux      — libgtk-3-dev libwebkit2gtk-4.0-dev (apt) or equivalent
+#   Windows    — MSVC or MinGW-w64 (CGO required); build natively or in CI
+#
+# CGO_LDFLAGS: macOS 14+ requires UniformTypeIdentifiers linked explicitly.
+app-bundle:
+    cd cmd/ztp-app && CGO_LDFLAGS="-framework UniformTypeIdentifiers" wails build -tags ble -clean
 
-# Run the desktop app with a fresh in-memory session: rebuild +
-# launch. No hot-reload of the Go side; restart after edits. The
-# SPA, when built and embedded via `just web-build`, picks up
-# changes on the next launch.
+# Smart rebuild for the dev loop: the first call runs app-bundle to create the
+# platform bundle (slow, happens once). Subsequent calls replace only the Go
+# binary inside the existing bundle (fast — skips the frontend pipeline and
+# wails scaffolding). The bundle icon, plist, and resources stay intact.
+#
+# On macOS the bundle lives at cmd/ztp-app/build/bin/ztp-app.app.
+# On Linux/Windows app-bundle is always re-run (no partial-update shortcut).
+app-build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "$(uname -s)" in
+    Darwin)
+        bundle=cmd/ztp-app/build/bin/ztp-app.app
+        if [[ ! -d "$bundle" ]]; then
+            just app-bundle
+        else
+            CGO_ENABLED=1 CGO_LDFLAGS="-framework UniformTypeIdentifiers" \
+                {{go}} build {{goflags}} -tags 'production ble' \
+                -o "$bundle/Contents/MacOS/ztp-app" ./cmd/ztp-app
+        fi
+        ;;
+    *)
+        just app-bundle
+        ;;
+    esac
+
+# Run the desktop app with a fresh in-memory session.
+#
+# macOS: opens the .app bundle — icon shows correctly in the Dock and Cmd+Tab
+# switcher. `open` returns immediately; close the previous window before
+# re-running to avoid duplicate instances.
+# Linux/Windows: run cmd/ztp-app/build/bin/ztp-app directly after `just app-bundle`.
 app-dev: app-build
-    {{bin_dir}}/ztp-app
+    open cmd/ztp-app/build/bin/ztp-app.app
 
 # Run the desktop app against the docker stack's persistent state
 # (deploy/data/ + deploy/profiles.d/). Stop `just up` first — SQLite
 # cannot be safely opened by two writers.
 app-dev-deploy: app-build
-    {{bin_dir}}/ztp-app -config deploy/config/ztp-app.yaml
+    open cmd/ztp-app/build/bin/ztp-app.app --args -config deploy/config/ztp-app.yaml
 
 # Run the desktop app with LAN listener + mDNS-SD advertisement so
-# devices running ztp-agent (no -server flag) discover it
-# automatically. Defaults to :8080; pass -listen <addr> to override.
+# devices running ztp-agent (no -server flag) discover it automatically.
+# Defaults to :8080; pass -listen <addr> to override.
 # Verify the announce on macOS with `dns-sd -B _ztp._tcp` or on
 # Linux with `avahi-browse -r _ztp._tcp`.
 app-dev-mdns: app-build
-    {{bin_dir}}/ztp-app -mdns
+    open cmd/ztp-app/build/bin/ztp-app.app --args -mdns
 
 # Mirror web/build/ into internal/server/web/dist/ so `go build` can
 # embed the freshly-built SPA. Kept as its own recipe so callers who

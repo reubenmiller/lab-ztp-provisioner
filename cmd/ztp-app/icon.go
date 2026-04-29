@@ -2,5 +2,5 @@ package main
 
 import _ "embed"
 
-//go:embed appicon.png
+//go:embed build/appicon.png
 var appIcon []byte
