@@ -35,6 +35,7 @@ import (
 
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/desktop"
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server/config"
+	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server/initdir"
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server/runtime"
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server/web"
 )
@@ -54,8 +55,21 @@ func main() {
 		"advertise the engine on the LAN via mDNS-SD (_ztp._tcp). Implies "+
 			"-listen :8080 unless -listen is set explicitly. Devices running "+
 			"ztp-agent with no -server flag will discover and enroll automatically.")
+	initDir := flag.String("init", "",
+		"scaffold a ZTP data directory at the given path (config, signing key, "+
+			"age key, default profile, admin token) and exit. Idempotent — safe "+
+			"to re-run on a partial tree. Pass the same path to -config to launch "+
+			"the app against the scaffolded data.")
 	verbose := flag.Bool("v", false, "verbose logging")
 	flag.Parse()
+
+	if *initDir != "" {
+		if err := runInit(*initDir); err != nil {
+			fmt.Fprintln(os.Stderr, "init:", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	level := slog.LevelInfo
 	if *verbose {
@@ -176,6 +190,39 @@ func main() {
 		logger.Error("wails run", "err", err)
 		os.Exit(1)
 	}
+}
+
+// runInit scaffolds a ZTP data directory and exits. Shares the
+// underlying scaffold with `ztp-server init <dir>` so the desktop app
+// and the CLI produce identical layouts. The printed launch line
+// points back at this same binary with -config, which is the
+// preferred desktop workflow (persistent SQLite + persistent keys).
+func runInit(dir string) error {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	res, err := initdir.Scaffold(initdir.Options{Dir: dir, Logger: logger})
+	if err != nil {
+		return err
+	}
+	fmt.Println()
+	fmt.Println("ZTP data directory initialised at", res.Dir)
+	fmt.Println()
+	fmt.Println("  config         ", res.ConfigPath)
+	fmt.Println("  admin token    ", res.AdminToken)
+	fmt.Println("  signing pubkey ", res.SigningPubB64)
+	fmt.Println("  age recipient  ", res.AgeRecipient)
+	fmt.Println()
+	fmt.Println("Launch the desktop app against this data with:")
+	fmt.Println()
+	fmt.Println("  ztp-app -config", res.ConfigPath)
+	fmt.Println()
+	if len(res.Skipped) > 0 {
+		fmt.Println("Note: the following files already existed and were left untouched:")
+		for _, s := range res.Skipped {
+			fmt.Println("  -", s)
+		}
+		fmt.Println()
+	}
+	return nil
 }
 
 // generateAdminToken mints a 32-byte random token rendered as

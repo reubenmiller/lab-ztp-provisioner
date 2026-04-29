@@ -23,15 +23,29 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server/config"
+	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server/initdir"
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server/runtime"
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server/web"
 )
 
 func main() {
+	// Subcommand sniff: `ztp-server init [dir]` scaffolds a fresh data
+	// directory and exits before any normal-server flag handling. Done
+	// here rather than via a real flag so the existing CLI surface
+	// (`-config …`, `-print-pubkey`, etc.) is unchanged.
+	if len(os.Args) > 1 && os.Args[1] == "init" {
+		if err := runInit(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "init:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	configPath := flag.String("config", "ztp-server.yaml", "path to config file")
 	verbose := flag.Bool("v", false, "verbose logging")
 	printPubkey := flag.Bool("print-pubkey", false, "print the server's signing public key (base64) and exit")
@@ -123,6 +137,62 @@ func printSigningPubkey(configPath string) error {
 	}
 	fmt.Println(base64.StdEncoding.EncodeToString(key.Public().(ed25519.PublicKey)))
 	return nil
+}
+
+// runInit handles the `ztp-server init [dir]` subcommand. It scaffolds
+// a directory tree containing ztp-server.yaml, signing/age keys, a
+// minimal default profile, and an .env file with a freshly minted
+// admin token. Idempotent — re-running fills missing pieces and
+// preserves existing keys/configs/tokens.
+func runInit(args []string) error {
+	fs := flag.NewFlagSet("init", flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), "Usage: ztp-server init [dir]")
+		fmt.Fprintln(fs.Output(), "")
+		fmt.Fprintln(fs.Output(), "Scaffold a ZTP server data directory at <dir> (default '.').")
+		fmt.Fprintln(fs.Output(), "Existing files are preserved; safe to re-run on a partial tree.")
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	dir := "."
+	if fs.NArg() > 0 {
+		dir = fs.Arg(0)
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	res, err := initdir.Scaffold(initdir.Options{Dir: dir, Logger: logger})
+	if err != nil {
+		return err
+	}
+	fmt.Println()
+	fmt.Println("ZTP server initialised at", res.Dir)
+	fmt.Println()
+	fmt.Println("  config        ", res.ConfigPath)
+	fmt.Println("  admin token   ", res.AdminToken, "(also in", relPath(res.Dir, res.EnvPath)+")")
+	fmt.Println("  signing pubkey", res.SigningPubB64)
+	fmt.Println("  age recipient ", res.AgeRecipient)
+	fmt.Println("  default profile", relPath(res.Dir, res.ProfilePath))
+	fmt.Println()
+	fmt.Println("Run the server with:")
+	fmt.Println()
+	fmt.Println("  cd", res.Dir)
+	fmt.Println("  ZTP_ADMIN_TOKEN=$(grep '^ZTP_ADMIN_TOKEN=' .env | cut -d= -f2-) ztp-server -config ztp-server.yaml")
+	fmt.Println()
+	if len(res.Skipped) > 0 {
+		fmt.Println("Note: the following files already existed and were left untouched:")
+		for _, s := range res.Skipped {
+			fmt.Println("  -", s)
+		}
+		fmt.Println()
+	}
+	return nil
+}
+
+func relPath(base, target string) string {
+	if r, err := filepath.Rel(base, target); err == nil {
+		return r
+	}
+	return target
 }
 
 // loadAgentScript best-effort loads the POSIX shell agent so
