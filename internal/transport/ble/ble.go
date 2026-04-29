@@ -130,24 +130,32 @@ func (p *Peripheral) Serve(ctx context.Context, handler func(req []byte) (resp [
 		return fmt.Errorf("add service: %w", err)
 	}
 
-	// LocalName is intentionally omitted from the advertisement payload.
-	// A 128-bit service UUID consumes 18 of the 31 bytes available in
-	// a BLE 4.x primary advertisement (after the 3-byte Flags AD type),
-	// leaving only ~8 bytes for any LocalName before the host stack is
-	// forced to push one of name/UUID into the scan-response packet.
-	// WinRT centrals default to passive scanning, which discards scan-
-	// response data — the symptom an operator sees is "0 of 600+
-	// scanned advertisements matched ZTP", followed by sporadic
-	// successes whenever Windows happens to deliver the right slice.
+	// Advertisement payload sizing for BLE 4.x: 31-byte cap on the
+	// primary PDU. A 128-bit service UUID consumes 18 bytes
+	// (1 length + 1 AD type + 16 bytes value), leaving only 13 bytes
+	// for everything else after the 3-byte Flags AD type — and BlueZ
+	// frequently auto-adds a 3-byte TX-Power AD entry on top, leaving
+	// just ~10 bytes for a LocalName AD entry (which itself costs 2
+	// bytes of header), i.e. up to 8 chars of name.
 	//
-	// Dropping LocalName here keeps the advertisement deterministic at
-	// 21 bytes (3 flags + 18 UUID), well under the 31-byte cap, so
-	// every passive-scan central reliably sees the service UUID. The
-	// peripheral's name is still readable post-connect via the GAP
-	// Device Name characteristic; identification before connect uses
-	// the MAC address (deviceLabel falls back to that automatically).
+	// The previous default ("ztp-rpi4-d83add90fe56", 23 chars) blew
+	// past that limit, so BlueZ pushed either the UUID or the name
+	// into the scan response. WinRT centrals default to PASSIVE scan
+	// mode, which discards scan-response data, so the device became
+	// effectively invisible to Windows ("0 of 600+ scanned
+	// advertisements matched ZTP", with intermittent successes
+	// whenever Windows happened to dedupe down to the right slice).
+	//
+	// Setting LocalName to the short literal AdvertisedLocalName
+	// (rather than leaving it empty) is the robust fix: it overrides
+	// BlueZ's default of falling back to the adapter alias when
+	// "local-name" is in `Includes`, which tinygo doesn't expose. The
+	// peripheral's full identity is still exposed via the enrollment
+	// envelope (device_id field) and any GAP Device Name read after
+	// connect.
 	adv := p.adapter.DefaultAdvertisement()
 	if err := adv.Configure(bluetooth.AdvertisementOptions{
+		LocalName:    AdvertisedLocalName,
 		ServiceUUIDs: []bluetooth.UUID{svcUUID},
 	}); err != nil {
 		return fmt.Errorf("configure adv: %w", err)

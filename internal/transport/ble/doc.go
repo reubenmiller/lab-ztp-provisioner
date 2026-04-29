@@ -46,12 +46,24 @@ const (
 	StatusDone     byte = 2
 	StatusError    byte = 3
 
-	// LocalNamePrefix is the advertised LocalName prefix peripherals
-	// use (NewPeripheral defaults to "ztp-device" but operators may
-	// pass any name starting with "ztp-"). Centrals use this as a
-	// secondary scan filter when the platform's BLE stack doesn't
-	// surface ServiceUUIDs reliably from the advertisement payload —
-	// notably WinRT, which sometimes only exposes service UUIDs via a
-	// post-connect GATT discovery rather than the scan-result list.
-	LocalNamePrefix = "ztp-"
+	// AdvertisedLocalName is the short literal peripherals put in the
+	// LocalName AD entry of their primary BLE advertisement. It is
+	// deliberately tiny (3 chars + 2-byte AD header = 5 bytes) so the
+	// 128-bit service UUID (18 bytes) plus Flags (3 bytes) plus an
+	// auto-added TX-Power entry (3 bytes) all fit inside the 31-byte
+	// primary-PDU cap on every BlueZ build, regardless of the
+	// adapter's alias / hostname. The peripheral's *real* identity
+	// (machine-id, hostname, tedge-identity) is shipped inside the
+	// enrollment envelope, so this short advertised label only has to
+	// be unique-ish among ZTP devices on the same airwave — a prefix
+	// match is enough for the central scan filter.
+	AdvertisedLocalName = "ztp"
+
+	// LocalNamePrefix is what centrals match when filtering scan
+	// results by name. It must be a prefix of AdvertisedLocalName so
+	// the peripheral's own advertisement triggers the match, but
+	// short enough to also catch legacy peripherals whose advertised
+	// LocalName is the longer device id (e.g. "ztp-rpi4-…") that
+	// earlier builds emitted before the 31-byte sizing was tightened.
+	LocalNamePrefix = "ztp"
 )

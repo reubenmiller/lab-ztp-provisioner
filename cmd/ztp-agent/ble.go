@@ -77,7 +77,18 @@ func runBLEPeripheral(ctx context.Context, cfg agent.Config, logger *slog.Logger
 	}
 	deviceName = bleAdvertisedName(deviceName, cfg.BLENamePrefix)
 	periph := ble.NewPeripheral(deviceName)
-	logger.Info("BLE: advertising peripheral", "name", deviceName)
+	// The "name" passed to NewPeripheral is the device's identity for
+	// post-connect display only. The primary BLE advertisement uses
+	// the short literal ble.AdvertisedLocalName so the 128-bit
+	// service UUID always fits inside the 31-byte primary-PDU cap on
+	// passive-scan WinRT centrals — long names like
+	// "ztp-rpi4-d83add90fe56" would otherwise force BlueZ to push
+	// either the name or the UUID into the scan response, where
+	// Windows can't see them.
+	logger.Info("BLE: peripheral ready",
+		"device_name", deviceName,
+		"advertised_name", ble.AdvertisedLocalName,
+		"service_uuid", ble.ServiceUUID)
 
 	// Option 3: relay writes current time to TimeSyncUUID before enrollment.
 	periph.OnTimeSync = func(serverTime time.Time) {
