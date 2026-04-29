@@ -46,6 +46,20 @@ func main() {
 		return
 	}
 
+	flag.Usage = func() {
+		out := flag.CommandLine.Output()
+		fmt.Fprintln(out, "ZTP server — provisioning service for ZTP agents.")
+		fmt.Fprintln(out, "")
+		fmt.Fprintln(out, "Usage:")
+		fmt.Fprintln(out, "  ztp-server                       run with ./ztp-server.yaml")
+		fmt.Fprintln(out, "  ztp-server -config <path>        run with the given config")
+		fmt.Fprintln(out, "  ztp-server init [dir]            scaffold a data directory and exit")
+		fmt.Fprintln(out, "  ztp-server -print-pubkey         print signing pubkey and exit")
+		fmt.Fprintln(out, "  ztp-server -h | --help           show this help")
+		fmt.Fprintln(out, "")
+		fmt.Fprintln(out, "Flags:")
+		flag.PrintDefaults()
+	}
 	configPath := flag.String("config", "ztp-server.yaml", "path to config file")
 	verbose := flag.Bool("v", false, "verbose logging")
 	printPubkey := flag.Bool("print-pubkey", false, "print the server's signing public key (base64) and exit")

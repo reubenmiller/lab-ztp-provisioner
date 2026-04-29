@@ -17,6 +17,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -41,11 +42,36 @@ import (
 )
 
 func main() {
+	// Subcommand sniff: `ztp-app init [dir]` scaffolds a data
+	// directory and exits BEFORE any flag parsing or Wails
+	// initialisation, mirroring `ztp-server init`. Done by raw
+	// os.Args inspection so the Windows windowsgui build (where
+	// flag.Parse failures would be invisible) can never accidentally
+	// fall through to launching the GUI when the operator typed
+	// "init". attachParentConsole reattaches stdio to the calling
+	// shell's console on Windows so the printed output is actually
+	// visible — it's a no-op on Linux/macOS.
+	if len(os.Args) > 1 && os.Args[1] == "init" {
+		attachParentConsole()
+		if err := runInit(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "init:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && (os.Args[1] == "-h" || os.Args[1] == "--help" || os.Args[1] == "help") {
+		attachParentConsole()
+		printAppUsage(os.Stdout)
+		return
+	}
+
+	flag.Usage = func() { printAppUsage(flag.CommandLine.Output()) }
 	configPath := flag.String("config", "",
 		"path to a YAML config (e.g. deploy/config/ztp-app.yaml) "+
 			"to reuse the docker-compose stack's persistent state. "+
-			"When empty, the app runs with a fresh in-memory store and "+
-			"ephemeral keys — every launch starts as a blank session.")
+			"When empty, the app looks for ./ztp-server.yaml in the "+
+			"working directory; if that's also missing, the app runs "+
+			"with a fresh in-memory store and ephemeral keys.")
 	listenFlag := flag.String("listen", "",
 		"TCP listen address. Default 127.0.0.1:0 (loopback only, ephemeral port). "+
 			"Pass e.g. ':8080' to make the engine reachable from the LAN — needed "+
@@ -55,21 +81,8 @@ func main() {
 		"advertise the engine on the LAN via mDNS-SD (_ztp._tcp). Implies "+
 			"-listen :8080 unless -listen is set explicitly. Devices running "+
 			"ztp-agent with no -server flag will discover and enroll automatically.")
-	initDir := flag.String("init", "",
-		"scaffold a ZTP data directory at the given path (config, signing key, "+
-			"age key, default profile, admin token) and exit. Idempotent — safe "+
-			"to re-run on a partial tree. Pass the same path to -config to launch "+
-			"the app against the scaffolded data.")
 	verbose := flag.Bool("v", false, "verbose logging")
 	flag.Parse()
-
-	if *initDir != "" {
-		if err := runInit(*initDir); err != nil {
-			fmt.Fprintln(os.Stderr, "init:", err)
-			os.Exit(1)
-		}
-		return
-	}
 
 	level := slog.LevelInfo
 	if *verbose {
@@ -195,9 +208,27 @@ func main() {
 // runInit scaffolds a ZTP data directory and exits. Shares the
 // underlying scaffold with `ztp-server init <dir>` so the desktop app
 // and the CLI produce identical layouts. The printed launch line
-// points back at this same binary with -config, which is the
-// preferred desktop workflow (persistent SQLite + persistent keys).
-func runInit(dir string) error {
+// points back at this same binary, which is the preferred desktop
+// workflow (persistent SQLite + persistent keys).
+func runInit(args []string) error {
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stdout, "Usage: ztp-app init [dir]")
+		fmt.Fprintln(os.Stdout, "")
+		fmt.Fprintln(os.Stdout, "Scaffold a ZTP data directory at <dir> (default '.').")
+		fmt.Fprintln(os.Stdout, "Existing files are preserved; safe to re-run on a partial tree.")
+		fmt.Fprintln(os.Stdout, "")
+		fmt.Fprintln(os.Stdout, "After init, launch the app from the same directory with:")
+		fmt.Fprintln(os.Stdout, "  ztp-app")
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	dir := "."
+	if fs.NArg() > 0 {
+		dir = fs.Arg(0)
+	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	res, err := initdir.Scaffold(initdir.Options{Dir: dir, Logger: logger})
 	if err != nil {
@@ -213,7 +244,8 @@ func runInit(dir string) error {
 	fmt.Println()
 	fmt.Println("Launch the desktop app against this data with:")
 	fmt.Println()
-	fmt.Println("  ztp-app -config", res.ConfigPath)
+	fmt.Println("  cd", res.Dir)
+	fmt.Println("  ztp-app")
 	fmt.Println()
 	if len(res.Skipped) > 0 {
 		fmt.Println("Note: the following files already existed and were left untouched:")
@@ -223,6 +255,22 @@ func runInit(dir string) error {
 		fmt.Println()
 	}
 	return nil
+}
+
+// printAppUsage writes the top-level help banner for `ztp-app`. Goes
+// to stdout (not stderr) when the user explicitly asked for help so
+// piping into `less` / clipboard works the way operators expect.
+func printAppUsage(out io.Writer) {
+	fmt.Fprintln(out, "ZTP desktop — bundles the SPA, the engine, and a native BLE relay.")
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, "Usage:")
+	fmt.Fprintln(out, "  ztp-app                       launch the GUI (uses ./ztp-server.yaml if present)")
+	fmt.Fprintln(out, "  ztp-app -config <path>        launch with the given config")
+	fmt.Fprintln(out, "  ztp-app init [dir]            scaffold a data directory and exit")
+	fmt.Fprintln(out, "  ztp-app -h | --help           show this help")
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, "Flags:")
+	flag.PrintDefaults()
 }
 
 // generateAdminToken mints a 32-byte random token rendered as
@@ -269,6 +317,16 @@ func resolveListenAddr(listenFlag string, mdns bool) string {
 // advertised port comes from listenAddr so the SRV record matches
 // what we actually bind.
 func loadConfig(configPath string, mdnsFlag bool, listenAddr string, logger *slog.Logger) (*config.Config, error) {
+	// Implicit default: when -config is not set, look for an
+	// init-scaffolded ztp-server.yaml in the working directory. If
+	// found, use it; otherwise fall back to ephemeral in-memory.
+	// This makes `cd <dir> && ztp-app` Just Work after `ztp-app init <dir>`.
+	if configPath == "" {
+		if _, err := os.Stat("ztp-server.yaml"); err == nil {
+			configPath = "ztp-server.yaml"
+			logger.Info("auto-detected local config", "path", configPath)
+		}
+	}
 	var cfg *config.Config
 	if configPath == "" {
 		cfg = &config.Config{
