@@ -1,2 +1,14 @@
 [toolchain]
 channel = "stable"
+# Targets installed automatically when rustup syncs this channel — keeps the
+# Docker cross-build (clients/rust/Dockerfile) and CI matrix in sync.
+# Without this list, an upstream `stable` bump triggers a re-sync that
+# silently drops cross targets, breaking `cargo build --target <triple>`.
+targets = [
+  "x86_64-unknown-linux-musl",
+  "aarch64-unknown-linux-musl",
+  "armv7-unknown-linux-musleabihf",
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "armv7-unknown-linux-gnueabihf",
+]
