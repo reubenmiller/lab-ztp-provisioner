@@ -27,7 +27,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  WAILS_VERSION: v2.10.1
+  WAILS_VERSION: v2.12.0
   NFPM_VERSION: v2.40.0
 
 jobs:
@@ -383,6 +383,24 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # Wails invokes `pnpm install` (frontend:install) and `just web-build`
+      # (frontend:build) inside `wails build`, so Node + pnpm + just must be
+      # on PATH. setup-node also gives us pnpm-store caching.
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 9
+          run_install: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
       - name: Install Wails
         run: |
           go install github.com/wailsapp/wails/v2/cmd/wails@${WAILS_VERSION}
@@ -473,6 +491,24 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # Wails invokes `pnpm install` (frontend:install) and `just web-build`
+      # (frontend:build) inside `wails build`, so Node + pnpm + just must be
+      # on PATH. setup-node also gives us pnpm-store caching.
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 9
+          run_install: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
       - name: Install Wails
         run: |
           go install github.com/wailsapp/wails/v2/cmd/wails@${WAILS_VERSION}
@@ -554,6 +590,24 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+
+      # Wails invokes `pnpm install` (frontend:install) and `just web-build`
+      # (frontend:build) inside `wails build`, so Node + pnpm + just must be
+      # on PATH. setup-node also gives us pnpm-store caching.
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 9
+          run_install: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
 
       - name: Install Wails
         run: |
