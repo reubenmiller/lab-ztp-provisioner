@@ -45,4 +45,13 @@ const (
 	StatusRelaying byte = 1
 	StatusDone     byte = 2
 	StatusError    byte = 3
+
+	// LocalNamePrefix is the advertised LocalName prefix peripherals
+	// use (NewPeripheral defaults to "ztp-device" but operators may
+	// pass any name starting with "ztp-"). Centrals use this as a
+	// secondary scan filter when the platform's BLE stack doesn't
+	// surface ServiceUUIDs reliably from the advertisement payload —
+	// notably WinRT, which sometimes only exposes service UUIDs via a
+	// post-connect GATT discovery rather than the scan-result list.
+	LocalNamePrefix = "ztp-"
 )

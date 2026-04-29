@@ -17,11 +17,35 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"tinygo.org/x/bluetooth"
 )
+
+// matchesZTPPeripheral reports whether a scan result looks like a ZTP
+// device worth connecting to. The primary signal is the advertised
+// 128-bit service UUID; the LocalName prefix is a fallback for stacks
+// that don't surface ServiceUUIDs from the scan payload (Windows
+// WinRT in particular — the UUID list often only populates after a
+// connect-and-discover round-trip, which is too late for a passive
+// scan filter).
+//
+// Tradeoff: any nearby device whose advertised name starts with "ztp-"
+// will be picked up. We accept this — the prefix is specific enough
+// that collisions with other vendor advertisements are unlikely, and
+// the post-connect characteristic check still rejects non-ZTP
+// peripherals before we forward anything to the server.
+func matchesZTPPeripheral(sr bluetooth.ScanResult, target bluetooth.UUID) bool {
+	if sr.AdvertisementPayload.HasServiceUUID(target) {
+		return true
+	}
+	if name := sr.LocalName(); name != "" && strings.HasPrefix(name, LocalNamePrefix) {
+		return true
+	}
+	return false
+}
 
 // adapterEnable runs bluetooth.DefaultAdapter.Enable() exactly once
 // per process. tinygo's CoreBluetooth backend on macOS rejects a
@@ -66,7 +90,7 @@ func (r *Relay) Run(ctx context.Context, reqResp func(req []byte) (resp []byte, 
 	devCh := make(chan bluetooth.ScanResult, 1)
 	go func() {
 		_ = r.adapter.Scan(func(_ *bluetooth.Adapter, sr bluetooth.ScanResult) {
-			if sr.AdvertisementPayload.HasServiceUUID(target) {
+			if matchesZTPPeripheral(sr, target) {
 				select {
 				case devCh <- sr:
 				default:
@@ -199,7 +223,7 @@ func Enroll(ctx context.Context, scanTimeout time.Duration, progress ProgressFn,
 	devCh := make(chan bluetooth.ScanResult, 1)
 	go func() {
 		_ = adapter.Scan(func(_ *bluetooth.Adapter, sr bluetooth.ScanResult) {
-			if sr.AdvertisementPayload.HasServiceUUID(target) {
+			if matchesZTPPeripheral(sr, target) {
 				select {
 				case devCh <- sr:
 				default:
