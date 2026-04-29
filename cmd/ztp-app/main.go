@@ -59,12 +59,10 @@ func main() {
 		}
 		return
 	}
-	if len(os.Args) > 1 && (os.Args[1] == "-h" || os.Args[1] == "--help" || os.Args[1] == "help") {
-		attachParentConsole()
-		printAppUsage(os.Stdout)
-		return
-	}
 
+	// Flags must be defined BEFORE the help check, otherwise
+	// flag.PrintDefaults inside printAppUsage has nothing to
+	// enumerate and the "Flags:" section comes back empty.
 	flag.Usage = func() { printAppUsage(flag.CommandLine.Output()) }
 	configPath := flag.String("config", "",
 		"path to a YAML config (e.g. deploy/config/ztp-app.yaml) "+
@@ -82,6 +80,12 @@ func main() {
 			"-listen :8080 unless -listen is set explicitly. Devices running "+
 			"ztp-agent with no -server flag will discover and enroll automatically.")
 	verbose := flag.Bool("v", false, "verbose logging")
+
+	if len(os.Args) > 1 && (os.Args[1] == "-h" || os.Args[1] == "--help" || os.Args[1] == "help") {
+		attachParentConsole()
+		printAppUsage(os.Stdout)
+		return
+	}
 	flag.Parse()
 
 	level := slog.LevelInfo
