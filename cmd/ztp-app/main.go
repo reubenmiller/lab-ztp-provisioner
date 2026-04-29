@@ -31,6 +31,7 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/mac"
 
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/desktop"
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server/config"
@@ -151,6 +152,13 @@ func main() {
 		Height: 800,
 		AssetServer: &assetserver.Options{
 			Handler: proxy,
+		},
+		Mac: &mac.Options{
+			About: &mac.AboutInfo{
+				Title:   "ZTP — Zero-Touch Provisioning",
+				Message: "Onboard devices automatically via mDNS or BLE.",
+				Icon:    appIcon,
+			},
 		},
 		OnStartup: func(wctx context.Context) {
 			// Stash the Wails-supplied context so binding methods
