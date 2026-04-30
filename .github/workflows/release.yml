@@ -258,17 +258,11 @@ jobs:
           DPKG_ARCH: ${{ matrix.dpkg_arch }}
         run: |
           set -exuo pipefail
+          cat /etc/apt/apt-mirrors.txt || true
           if [[ "$DPKG_ARCH" != "amd64" ]]; then
             sudo dpkg --add-architecture "$DPKG_ARCH"
-
-            # Add ports repo for foreign arch
-            {
-              echo "deb [arch=${DPKG_ARCH}] http://ports.ubuntu.com/ubuntu-ports noble main universe restricted multiverse"
-              echo "deb [arch=${DPKG_ARCH}] http://ports.ubuntu.com/ubuntu-ports noble-updates main universe restricted multiverse"
-              echo "deb [arch=${DPKG_ARCH}] http://ports.ubuntu.com/ubuntu-ports noble-security main universe restricted multiverse"
-            } | sudo tee "/etc/apt/sources.list.d/${DPKG_ARCH}.list"
           fi
-          sudo apt-get update
+          sudo apt-get update ||:
           if [[ "$DPKG_ARCH" == "amd64" ]]; then
             sudo apt-get install -y libdbus-1-dev pkg-config
           else
@@ -282,6 +276,7 @@ jobs:
           # allowed across architectures and pointed at the cross-arch .pc files.
           PKG_CONFIG_ALLOW_CROSS: '1'
           PKG_CONFIG_PATH: ${{ matrix.dpkg_arch == 'amd64' && '/usr/lib/x86_64-linux-gnu/pkgconfig' || matrix.dpkg_arch == 'arm64' && '/usr/lib/aarch64-linux-gnu/pkgconfig' || matrix.dpkg_arch == 'armhf' && '/usr/lib/arm-linux-gnueabihf/pkgconfig' || '' }}
+          RUSTFLAGS: matrix.dpkg_arch == 'armhf' && '-C target-cpu=arm1176jzf-s' || '' }}
         run: |
           set -exuo pipefail
           cargo zigbuild --release --target "${{ matrix.target }}" --features "${{ matrix.features }}"
