@@ -657,7 +657,6 @@ fn build_http_candidates(
             match mdns::discover(_mdns_service, Duration::from_secs(5)) {
                 Ok(entry) => {
                     let discovered_url = entry.url().to_string();
-                    let dial = entry.dial_addr();
                     if let Some(dial_str) = transport::probe_with_mdns(&discovered_url) {
                         let hint = if _server_pubkey.is_empty() {
                             entry.pubkey().map(|pk| {
@@ -670,7 +669,7 @@ fn build_http_candidates(
                         log::info!("candidates: mDNS discovered server reachable url={discovered_url}");
                         candidates.push(HttpCandidate {
                             url: discovered_url,
-                            dial_addr: if dial_str.is_empty() { Some(dial) } else { Some(dial_str) },
+                            dial_addr: if dial_str.is_empty() { None } else { Some(dial_str) },
                             pubkey_hint: hint,
                         });
                     } else {

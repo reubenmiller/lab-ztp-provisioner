@@ -442,8 +442,7 @@ func buildHTTPCandidates(
 		defer mcancel()
 		if entry, err := mdns.Discover(mctx, mdnsService, 4*time.Second); err == nil {
 			discoveredURL := entry.URL()
-			discoveredDial := entry.DialAddr()
-			if ok, _ := probeWithMDNS(discoveredURL, logger); ok {
+			if ok, discoveredDial := probeWithMDNS(discoveredURL, logger); ok {
 				hint := ""
 				if *serverPubKey == "" {
 					for _, t := range entry.Info {

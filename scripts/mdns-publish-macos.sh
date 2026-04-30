@@ -48,12 +48,31 @@ if ! command -v dns-sd >/dev/null 2>&1; then
   exit 1
 fi
 
-# Pick the first non-loopback IPv4 (en0 = Wi-Fi, en1 = Thunderbolt/Ethernet).
+# Pick a LAN IPv4 using routing hints instead of hardcoded interface order.
+# 1) Interface for route to ZTP_SERVER host.
+# 2) Interface for default route.
+# 3) First non-loopback IPv4 on any interface.
 LAN_IP=""
-for iface in en0 en1 en2 en3; do
-  ip=$(ipconfig getifaddr "$iface" 2>/dev/null || true)
-  if [ -n "$ip" ]; then LAN_IP="$ip"; break; fi
-done
+_server_host=$(printf '%s' "$ZTP_SERVER" | sed -E 's#^[a-zA-Z]+://([^/:]+).*#\1#')
+_route_iface=""
+if [ -n "$_server_host" ]; then
+  _route_iface=$(route -n get "$_server_host" 2>/dev/null | awk '/interface:/{print $2; exit}')
+fi
+if [ -z "$_route_iface" ]; then
+  _route_iface=$(route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}')
+fi
+if [ -n "$_route_iface" ]; then
+  LAN_IP=$(ipconfig getifaddr "$_route_iface" 2>/dev/null || true)
+fi
+if [ -z "$LAN_IP" ]; then
+  for iface in $(ifconfig -l); do
+    ip=$(ipconfig getifaddr "$iface" 2>/dev/null || true)
+    case "$ip" in
+      ""|127.*) continue ;;
+      *) LAN_IP="$ip"; break ;;
+    esac
+  done
+fi
 if [ -z "$LAN_IP" ]; then
   echo "could not detect a LAN IPv4 address" >&2
   exit 1

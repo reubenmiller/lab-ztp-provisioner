@@ -109,6 +109,18 @@ func main() {
 		logger.Error("load config", "err", err)
 		os.Exit(1)
 	}
+	// If mDNS is enabled in YAML (common for desktop's scaffolded config)
+	// but -listen was not set explicitly, force a LAN-reachable default.
+	// Otherwise we'd advertise an ephemeral loopback-only listener that
+	// other devices cannot reach.
+	if *listenFlag == "" && !*mdnsFlag && cfg.MDNS.Enabled && listenAddr == "127.0.0.1:0" {
+		listenAddr = ":8080"
+		cfg, err = loadConfig(desktopPaths.ConfigPath, *mdnsFlag, listenAddr, logger)
+		if err != nil {
+			logger.Error("load config", "err", err)
+			os.Exit(1)
+		}
+	}
 	if desktopPaths.AdminTokenFile == "" {
 		desktopPaths.AdminTokenFile = cfg.AdminTokenFile
 	}
