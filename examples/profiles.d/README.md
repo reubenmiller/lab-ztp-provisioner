@@ -47,6 +47,66 @@ When nothing matches, enrollment is **rejected**.
   (wifi password, c8y `static_token`, hook script, file contents) so admin
   UI screenshots and audit trails are safe to share.
 
+## Shared Cumulocity credentials via `credential_ref`
+
+Profiles reference a shared Cumulocity credential entry instead of embedding
+`username`, `password`, or a `credentials_file` path directly.
+
+The reference lives under `payload.cumulocity.issuer.credential_ref`.
+
+### File-backed profile example
+
+```yaml
+name: default
+payload:
+  cumulocity:
+    issuer:
+      mode: local
+      credential_ref: prod-eu
+```
+
+The shared credential entry itself comes from the runtime:
+
+- `ztp-app`: managed in the desktop app Config/Secrets page and stored in the
+  OS keyring.
+- `ztp-server`: defined in `ztp-server.yaml` under `c8y_credentials:`.
+
+Example `ztp-server.yaml` entry:
+
+```yaml
+c8y_credentials:
+  prod-eu:
+    url: https://tenant.example.cumulocity.com
+    tenant: t12345
+    credentials_file: data/c8y-prod-eu.credentials
+```
+
+### DB-backed profile example
+
+Send the same shape in the profile payload JSON:
+
+```json
+{
+  "name": "factory-a",
+  "payload": {
+    "cumulocity": {
+      "issuer": {
+        "mode": "local",
+        "credential_ref": "prod-eu"
+      }
+    }
+  }
+}
+```
+
+### Merge rules
+
+- `credential_ref` supplies missing `url`, `tenant`, `username`, `password`,
+  and `credentials_file` values.
+- Explicit values in the profile still win over the referenced entry.
+- A missing `credential_ref` is a startup/reload error so bad references fail
+  loudly rather than silently falling back to environment variables.
+
 ## Validation
 
 Profile names must match `^[a-z0-9][a-z0-9_-]{0,62}$`. The file stem is

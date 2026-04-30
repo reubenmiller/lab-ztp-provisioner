@@ -60,9 +60,25 @@ type Config struct {
 	// verifier nor a selector picked one. Empty falls back to literal "default".
 	DefaultProfile string `yaml:"default_profile"`
 
+	// C8YCredentials is the optional shared credential catalog used by
+	// payload.cumulocity.issuer.credential_ref in file-backed and DB-backed
+	// profiles. Secrets may be provided inline, via credentials_file, or by
+	// an entrypoint-specific external lookup such as the desktop app keyring.
+	C8YCredentials map[string]C8YCredential `yaml:"c8y_credentials"`
+
 	Store StoreConfig `yaml:"store"`
 	MDNS  MDNSConfig  `yaml:"mdns"`
 	Web   WebConfig   `yaml:"web"`
+}
+
+// C8YCredential is one named shared credential entry available to
+// payload.cumulocity.issuer.credential_ref.
+type C8YCredential struct {
+	URL             string `yaml:"url,omitempty"`
+	Tenant          string `yaml:"tenant,omitempty"`
+	Username        string `yaml:"username,omitempty"`
+	Password        string `yaml:"password,omitempty"`
+	CredentialsFile string `yaml:"credentials_file,omitempty"`
 }
 
 // StoreConfig selects the persistence backend.
@@ -167,6 +183,10 @@ func (c *Config) resolveRelativePaths(baseDir string) {
 	// special in-memory DSNs untouched.
 	if strings.EqualFold(c.Store.Driver, "sqlite") && isLikelyFilePathDSN(c.Store.DSN) {
 		c.Store.DSN = resolvePath(baseDir, c.Store.DSN)
+	}
+	for name, cred := range c.C8YCredentials {
+		cred.CredentialsFile = resolvePath(baseDir, cred.CredentialsFile)
+		c.C8YCredentials[name] = cred
 	}
 }
 

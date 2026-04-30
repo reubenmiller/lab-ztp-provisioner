@@ -33,6 +33,7 @@ import (
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server"
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server/api"
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server/config"
+	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server/payload"
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server/profiles"
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server/store"
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server/store/sqlitestore"
@@ -73,6 +74,7 @@ func Start(ctx context.Context, opts Options) (*Handle, error) {
 	if opts.ListenOverride != "" {
 		cfg.Listen = opts.ListenOverride
 	}
+	payload.SetCredentialLookup(buildC8YCredentialLookup(cfg, opts.C8YCredentialLookup))
 
 	signingKey, err := cfg.LoadOrCreateSigningKey()
 	if err != nil {
@@ -219,6 +221,37 @@ func Start(ctx context.Context, opts Options) (*Handle, error) {
 		hub:           hub,
 		serveErr:      serveErr,
 	}, nil
+}
+
+func buildC8YCredentialLookup(cfg *config.Config, overlay payload.CredentialLookup) payload.CredentialLookup {
+	if (cfg == nil || len(cfg.C8YCredentials) == 0) && overlay == nil {
+		return nil
+	}
+	return func(ref string) (payload.CredentialMaterial, bool) {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			return payload.CredentialMaterial{}, false
+		}
+		if overlay != nil {
+			if mat, ok := overlay(ref); ok {
+				return mat, true
+			}
+		}
+		if cfg == nil {
+			return payload.CredentialMaterial{}, false
+		}
+		cred, ok := cfg.C8YCredentials[ref]
+		if !ok {
+			return payload.CredentialMaterial{}, false
+		}
+		return payload.CredentialMaterial{
+			URL:             cred.URL,
+			Tenant:          cred.Tenant,
+			Username:        cred.Username,
+			Password:        cred.Password,
+			CredentialsFile: cred.CredentialsFile,
+		}, true
+	}
 }
 
 // loadConfig honours the Options precedence: an inline *config.Config

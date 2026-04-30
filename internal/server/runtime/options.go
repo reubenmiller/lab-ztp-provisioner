@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server/config"
+	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server/payload"
 )
 
 // Options control how Start brings the engine, store, profile loader,
@@ -56,4 +57,8 @@ type Options struct {
 	// uses to feature-detect, e.g. "ble.central.native" for the
 	// desktop app's Wails-bound BLE relay.
 	RuntimeCapabilities []string
+
+	// C8YCredentialLookup overlays credential_ref resolution with
+	// entrypoint-specific secret sources, e.g. the desktop app keyring.
+	C8YCredentialLookup payload.CredentialLookup
 }

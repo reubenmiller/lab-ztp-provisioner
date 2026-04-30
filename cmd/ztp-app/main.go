@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	goruntime "runtime"
 	"strconv"
 	"syscall"
 	"time"
@@ -34,6 +35,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
+	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/desktop"
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server/config"
@@ -135,6 +137,7 @@ func main() {
 	// for via the CLI flags.
 	h, err := runtime.Start(ctx, runtime.Options{
 		Config:              cfg,
+		C8YCredentialLookup: desktop.BuildC8YCredentialLookup(desktopPaths.ConfigDir),
 		Logger:              logger,
 		ListenOverride:      listenAddr,
 		AdminTokenOverride:  token,
@@ -227,6 +230,15 @@ func main() {
 			// progress events would silently drop.
 			app.SetContext(wctx)
 		},
+		OnDomReady: func(wctx context.Context) {
+			// On macOS, the first-launch Bluetooth privacy prompt can
+			// appear before the webview is fully interactive. Reassert
+			// focus a few times so input/cursor state is correct once the
+			// prompt is dismissed.
+			if goruntime.GOOS == "darwin" {
+				go nudgeWindowFocus(wctx)
+			}
+		},
 		OnShutdown: func(_ context.Context) {
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
@@ -236,6 +248,28 @@ func main() {
 	}); err != nil {
 		logger.Error("wails run", "err", err)
 		os.Exit(1)
+	}
+}
+
+func nudgeWindowFocus(ctx context.Context) {
+	if ctx == nil {
+		return
+	}
+	activate := func() {
+		wruntime.Show(ctx)
+		wruntime.WindowShow(ctx)
+		wruntime.WindowUnminimise(ctx)
+		wruntime.WindowExecJS(ctx, "window.focus()")
+	}
+
+	activate()
+	for _, delay := range []time.Duration{350 * time.Millisecond, 1200 * time.Millisecond, 2500 * time.Millisecond} {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+			activate()
+		}
 	}
 }
 

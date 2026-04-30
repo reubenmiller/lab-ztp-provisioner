@@ -377,6 +377,50 @@ If the bundle delivery later fails, callers can call
 Cumulocity. Cumulocity also expires the token by TTL even without an
 explicit revoke.
 
+### Shared credential references
+
+Profiles can avoid embedding local-issuer secrets directly by using
+`issuer.credential_ref`. The profile points at a named shared credential,
+and the runtime supplies the concrete auth material.
+
+Supported sources are:
+
+- `ztp-app`: the operator stores the credential in the desktop app's
+  Config/Secrets page; the secret lives in the OS keychain and the profile
+  refers to it by ID.
+- `ztp-server`: the operator defines the shared credential catalog in
+  `ztp-server.yaml` under `c8y_credentials:` and profiles refer to those IDs.
+
+File-backed profile example:
+
+```yaml
+payload:
+  cumulocity:
+    issuer:
+      mode: local
+      credential_ref: prod-eu
+```
+
+DB-backed profile example (`POST /v1/admin/profiles` payload fragment):
+
+```json
+{
+  "payload": {
+    "cumulocity": {
+      "issuer": {
+        "mode": "local",
+        "credential_ref": "prod-eu"
+      }
+    }
+  }
+}
+```
+
+`credential_ref` supplies missing `url`, `tenant`, `username`, `password`,
+and `credentials_file` fields. Explicit values in the profile still win. A
+missing reference is treated as a configuration error during startup or
+profile reload.
+
 ### Per-device overrides
 
 The admin API can set `Device.Overrides["c8y_enrollment_token"]` to force a

@@ -169,14 +169,14 @@ type EnrollResult struct {
 // labels are part of the contract with the SPA — adding new ones is
 // fine, renaming existing ones requires updating the UI's switch.
 const (
-	PhaseScanning        = "scanning"
-	PhaseConnected       = "connected"        // detail = device name (or address if name unavailable)
-	PhaseTimeSync        = "time-sync"        // best-effort write succeeded
-	PhaseTrigger         = "trigger"          // wrote the empty-EOM kick
-	PhaseEnvelopeRead    = "envelope-read"    // detail = byte count
-	PhaseSubmitting      = "submitting"       // handing envelope to the submit hook (typically POST /v1/enroll)
-	PhaseWritingBundle   = "writing-bundle"   // detail = byte count
-	PhaseDone            = "done"
+	PhaseScanning      = "scanning"
+	PhaseConnected     = "connected"      // detail = device name (or address if name unavailable)
+	PhaseTimeSync      = "time-sync"      // best-effort write succeeded
+	PhaseTrigger       = "trigger"        // wrote the empty-EOM kick
+	PhaseEnvelopeRead  = "envelope-read"  // detail = byte count
+	PhaseSubmitting    = "submitting"     // handing envelope to the submit hook (typically POST /v1/enroll)
+	PhaseWritingBundle = "writing-bundle" // detail = byte count
+	PhaseDone          = "done"
 )
 
 // ProgressFn is invoked at each phase of the Enroll flow. detail is a
@@ -358,6 +358,30 @@ func Enroll(ctx context.Context, scanTimeout time.Duration, progress ProgressFn,
 	reqUUID := parseUUID(RequestUUID)
 	respUUID := parseUUID(ResponseUUID)
 	tsUUID := parseUUID(TimeSyncUUID)
+	mapChars := func(discovered []bluetooth.DeviceCharacteristic) (reqCh, respCh, timeSyncCh *bluetooth.DeviceCharacteristic, seenUUIDs []string) {
+		seenUUIDs = make([]string, 0, len(discovered))
+		for i := range discovered {
+			u := discovered[i].UUID()
+			seenUUIDs = append(seenUUIDs, u.String())
+			// Direct UUID equality (UUID is a [4]uint32 value type) is
+			// safer than .String() comparison: tinygo's per-platform
+			// stringification has historically returned different cases
+			// between BlueZ and WinRT, which silently broke the previous
+			// switch even when the underlying bytes matched.
+			switch u {
+			case reqUUID:
+				c := discovered[i]
+				reqCh = &c
+			case respUUID:
+				c := discovered[i]
+				respCh = &c
+			case tsUUID:
+				c := discovered[i]
+				timeSyncCh = &c
+			}
+		}
+		return reqCh, respCh, timeSyncCh, seenUUIDs
+	}
 	chars, err := svcs[0].DiscoverCharacteristics([]bluetooth.UUID{reqUUID, respUUID})
 	if err != nil {
 		// Fallback: enumerate every characteristic on the service so
@@ -372,28 +396,7 @@ func Enroll(ctx context.Context, scanTimeout time.Duration, progress ProgressFn,
 		}
 		chars = all
 	}
-	var reqCh, respCh, timeSyncCh *bluetooth.DeviceCharacteristic
-	seenUUIDs := make([]string, 0, len(chars))
-	for i := range chars {
-		u := chars[i].UUID()
-		seenUUIDs = append(seenUUIDs, u.String())
-		// Direct UUID equality (UUID is a [4]uint32 value type) is
-		// safer than .String() comparison: tinygo's per-platform
-		// stringification has historically returned different cases
-		// between BlueZ and WinRT, which silently broke the previous
-		// switch even when the underlying bytes matched.
-		switch u {
-		case reqUUID:
-			c := chars[i]
-			reqCh = &c
-		case respUUID:
-			c := chars[i]
-			respCh = &c
-		case tsUUID:
-			c := chars[i]
-			timeSyncCh = &c
-		}
-	}
+	reqCh, respCh, timeSyncCh, seenUUIDs := mapChars(chars)
 	if reqCh == nil || respCh == nil {
 		return nil, fmt.Errorf("device missing required ZTP characteristics (discovered %d: %v; need request=%s, response=%s)",
 			len(chars), seenUUIDs, RequestUUID, ResponseUUID)
@@ -404,9 +407,26 @@ func Enroll(ctx context.Context, scanTimeout time.Duration, progress ProgressFn,
 	// nudge the device's clock before the envelope is signed.
 	if timeSyncCh == nil {
 		if tsChars, err := svcs[0].DiscoverCharacteristics([]bluetooth.UUID{tsUUID}); err == nil && len(tsChars) > 0 {
-			c := tsChars[0]
-			timeSyncCh = &c
+			// tinygo's Darwin backend resolves notify/read/write callbacks by
+			// searching the service's cached characteristic slice, and every
+			// DiscoverCharacteristics call replaces that cache. If the optional
+			// TimeSync characteristic only appears on this second pass, rebuild
+			// the cache from one final discovery that includes request/response
+			// again before enabling notifications.
+			chars, err = svcs[0].DiscoverCharacteristics([]bluetooth.UUID{reqUUID, respUUID, tsUUID})
+			if err != nil {
+				all, fallbackErr := svcs[0].DiscoverCharacteristics(nil)
+				if fallbackErr != nil {
+					return nil, fmt.Errorf("rediscover chars after timesync discovery: %w (unfiltered fallback also failed: %v)", err, fallbackErr)
+				}
+				chars = all
+			}
+			reqCh, respCh, timeSyncCh, seenUUIDs = mapChars(chars)
 		}
+	}
+	if reqCh == nil || respCh == nil {
+		return nil, fmt.Errorf("device missing required ZTP characteristics after rediscovery (discovered %d: %v; need request=%s, response=%s)",
+			len(chars), seenUUIDs, RequestUUID, ResponseUUID)
 	}
 	slog.Debug("ble: characteristics resolved",
 		"discovered_in_first_pass", len(chars),
@@ -415,6 +435,20 @@ func Enroll(ctx context.Context, scanTimeout time.Duration, progress ProgressFn,
 		"response_found", respCh != nil,
 		"timesync_found", timeSyncCh != nil)
 
+	// Subscribe to notifications BEFORE any write to the peripheral.
+	// On CoreBluetooth a prior WriteWithoutResponse can leave the CCCD
+	// descriptor write for EnableNotifications queued behind it, which
+	// then surfaces as "timeout on EnableNotifications" even though the
+	// write itself eventually reaches the device. We therefore subscribe
+	// first, then do the best-effort time sync, then trigger the envelope.
+	envCh := make(chan []byte, 1)
+	envErrCh := make(chan error, 1)
+	subCtx, subCancel := context.WithCancel(ctx)
+	defer subCancel()
+	if err := startFramedReader(subCtx, *respCh, 60*time.Second, envCh, envErrCh); err != nil {
+		return nil, fmt.Errorf("enable notifications: %w", err)
+	}
+
 	// Best-effort time sync. Older devices may not advertise the
 	// characteristic; silently skip.
 	if timeSyncCh != nil {
@@ -422,19 +456,6 @@ func Enroll(ctx context.Context, scanTimeout time.Duration, progress ProgressFn,
 		if _, err := timeSyncCh.WriteWithoutResponse(ts); err == nil {
 			emit(PhaseTimeSync, string(ts))
 		}
-	}
-
-	// Subscribe to notifications BEFORE kicking the device — otherwise
-	// fast peripherals can publish their response before the CCCD
-	// descriptor write lands, which on CoreBluetooth surfaces as
-	// "timeout on EnableNotifications" because the descriptor write
-	// is queued behind the WriteWithoutResponse we sent on reqCh.
-	envCh := make(chan []byte, 1)
-	envErrCh := make(chan error, 1)
-	subCtx, subCancel := context.WithCancel(ctx)
-	defer subCancel()
-	if err := startFramedReader(subCtx, *respCh, 60*time.Second, envCh, envErrCh); err != nil {
-		return nil, fmt.Errorf("enable notifications: %w", err)
 	}
 
 	// Trigger the device's envelope publication with an empty EOM,

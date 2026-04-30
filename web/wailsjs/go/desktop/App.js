@@ -14,8 +14,16 @@ export function Context() {
   return window['go']['desktop']['App']['Context']();
 }
 
+export function DeleteC8YCredential(arg1) {
+  return window['go']['desktop']['App']['DeleteC8YCredential'](arg1);
+}
+
 export function GetRuntimeInfo() {
   return window['go']['desktop']['App']['GetRuntimeInfo']();
+}
+
+export function ListC8YCredentials() {
+  return window['go']['desktop']['App']['ListC8YCredentials']();
 }
 
 export function ListProfileFiles() {
@@ -48,6 +56,10 @@ export function SealProfile(arg1, arg2) {
 
 export function SealProfileForSave(arg1) {
   return window['go']['desktop']['App']['SealProfileForSave'](arg1);
+}
+
+export function SetC8YCredential(arg1, arg2, arg3, arg4) {
+  return window['go']['desktop']['App']['SetC8YCredential'](arg1, arg2, arg3, arg4);
 }
 
 export function SetContext(arg1) {

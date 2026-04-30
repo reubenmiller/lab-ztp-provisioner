@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server/payload/c8yissuer"
@@ -33,10 +34,16 @@ import (
 //	           its enrollment token by some out-of-band mechanism.
 type IssuerConfig struct {
 	Mode string `yaml:"mode,omitempty" json:"mode,omitempty"`
+	// CredentialRef names a shared credential entry supplied by the runtime.
+	// When set, missing URL / tenant / username / password / credentials_file
+	// fields are filled from that entry before issuer construction.
+	CredentialRef string `yaml:"credential_ref,omitempty" json:"credential_ref,omitempty"`
 
 	// Local-mode fields.
 	BaseURL         string `yaml:"base_url,omitempty" json:"base_url,omitempty"`
 	Tenant          string `yaml:"tenant,omitempty" json:"tenant,omitempty"`
+	Username        string `yaml:"username,omitempty" json:"username,omitempty"`
+	Password        string `yaml:"password,omitempty" json:"password,omitempty" ztp:"sensitive"`
 	CredentialsFile string `yaml:"credentials_file,omitempty" json:"credentials_file,omitempty"`
 
 	// Remote-mode fields.
@@ -47,6 +54,38 @@ type IssuerConfig struct {
 
 	// Static-mode field. INSECURE. The package logs a warning when used.
 	StaticToken string `yaml:"static_token,omitempty" json:"static_token,omitempty" ztp:"sensitive"`
+}
+
+// CredentialMaterial is the resolved shared credential entry supplied by the
+// runtime for credential_ref lookups.
+type CredentialMaterial struct {
+	URL             string
+	Tenant          string
+	Username        string
+	Password        string
+	CredentialsFile string
+}
+
+// CredentialLookup resolves a credential_ref to concrete auth material.
+type CredentialLookup func(ref string) (CredentialMaterial, bool)
+
+var (
+	credentialLookupMu sync.RWMutex
+	credentialLookup   CredentialLookup
+)
+
+// SetCredentialLookup installs the process-wide lookup used by ResolveIssuer.
+// A nil function clears the lookup.
+func SetCredentialLookup(fn CredentialLookup) {
+	credentialLookupMu.Lock()
+	credentialLookup = fn
+	credentialLookupMu.Unlock()
+}
+
+func getCredentialLookup() CredentialLookup {
+	credentialLookupMu.RLock()
+	defer credentialLookupMu.RUnlock()
+	return credentialLookup
 }
 
 // Cumulocity emits a c8y.v2 (INI) module containing connection
@@ -96,6 +135,20 @@ func (c *Cumulocity) ResolveIssuer(logger *slog.Logger) error {
 	if c.logger == nil {
 		c.logger = slog.Default()
 	}
+	return c.resolveIssuer()
+}
+
+func (c *Cumulocity) resolveIssuer() error {
+	issuerCfg, material, err := resolveCredentialRef(c.Issuer)
+	if err != nil {
+		return err
+	}
+	if c.URL == "" {
+		c.URL = material.URL
+	}
+	if c.Tenant == "" {
+		c.Tenant = material.Tenant
+	}
 	// Fall back to env for URL / Tenant so go-c8y-cli sessions Just Work.
 	if c.URL == "" {
 		c.URL = firstNonEmpty(os.Getenv("C8Y_BASEURL"), os.Getenv("C8Y_URL"), os.Getenv("C8Y_HOST"))
@@ -103,9 +156,11 @@ func (c *Cumulocity) ResolveIssuer(logger *slog.Logger) error {
 	if c.Tenant == "" {
 		c.Tenant = os.Getenv("C8Y_TENANT")
 	}
-	switch strings.ToLower(strings.TrimSpace(c.Issuer.Mode)) {
+	switch strings.ToLower(strings.TrimSpace(issuerCfg.Mode)) {
 	case "":
-		c.logger.Warn("cumulocity provider: no issuer configured; emitted modules will not contain an enrollment token")
+		if c.URL != "" || c.Tenant != "" {
+			c.logger.Warn("cumulocity provider: no issuer configured; emitted modules will not contain an enrollment token")
+		}
 		return nil
 	case "local":
 		// Credential resolution (file vs env) and reachability are entirely
@@ -114,9 +169,11 @@ func (c *Cumulocity) ResolveIssuer(logger *slog.Logger) error {
 		// the rest of the stack stays up. The c8y provider then emits modules
 		// without an enrollment token, just like mode="".
 		iss, err := c8yissuer.NewLocalIssuer(c8yissuer.LocalConfig{
-			BaseURL:         firstNonEmpty(c.Issuer.BaseURL, c.URL),
-			Tenant:          firstNonEmpty(c.Issuer.Tenant, c.Tenant),
-			CredentialsFile: c.Issuer.CredentialsFile,
+			BaseURL:         firstNonEmpty(issuerCfg.BaseURL, c.URL, material.URL),
+			Tenant:          firstNonEmpty(issuerCfg.Tenant, c.Tenant, material.Tenant),
+			Username:        firstNonEmpty(issuerCfg.Username, material.Username),
+			Password:        firstNonEmpty(issuerCfg.Password, material.Password),
+			CredentialsFile: firstNonEmpty(issuerCfg.CredentialsFile, material.CredentialsFile),
 			Logger:          c.logger.With("component", "c8yissuer.local"),
 		})
 		if err != nil {
@@ -134,10 +191,10 @@ func (c *Cumulocity) ResolveIssuer(logger *slog.Logger) error {
 		}
 	case "remote":
 		iss, err := c8yissuer.NewRemoteIssuer(c8yissuer.RemoteConfig{
-			Endpoint:       c.Issuer.Endpoint,
-			ClientCertFile: c.Issuer.ClientCertFile,
-			ClientKeyFile:  c.Issuer.ClientKeyFile,
-			CACertFile:     c.Issuer.CACertFile,
+			Endpoint:       issuerCfg.Endpoint,
+			ClientCertFile: issuerCfg.ClientCertFile,
+			ClientKeyFile:  issuerCfg.ClientKeyFile,
+			CACertFile:     issuerCfg.CACertFile,
 			Logger:         c.logger.With("component", "c8yissuer.remote"),
 		})
 		if err != nil {
@@ -145,15 +202,31 @@ func (c *Cumulocity) ResolveIssuer(logger *slog.Logger) error {
 		}
 		c.issuer = iss
 	case "static":
-		if c.Issuer.StaticToken == "" {
+		if issuerCfg.StaticToken == "" {
 			return errors.New("cumulocity issuer: mode=static requires static_token")
 		}
-		c.issuer = c8yissuer.NewStaticIssuer(c.Issuer.StaticToken, time.Duration(c.TokenTTL),
+		c.issuer = c8yissuer.NewStaticIssuer(issuerCfg.StaticToken, time.Duration(c.TokenTTL),
 			c.logger.With("component", "c8yissuer.static"))
 	default:
-		return fmt.Errorf("cumulocity issuer: unknown mode %q", c.Issuer.Mode)
+		return fmt.Errorf("cumulocity issuer: unknown mode %q", issuerCfg.Mode)
 	}
 	return nil
+}
+
+func resolveCredentialRef(cfg IssuerConfig) (IssuerConfig, CredentialMaterial, error) {
+	ref := strings.TrimSpace(cfg.CredentialRef)
+	if ref == "" {
+		return cfg, CredentialMaterial{}, nil
+	}
+	lookup := getCredentialLookup()
+	if lookup == nil {
+		return cfg, CredentialMaterial{}, fmt.Errorf("cumulocity issuer: credential_ref %q is configured but no credential lookup is available", ref)
+	}
+	mat, ok := lookup(ref)
+	if !ok {
+		return cfg, CredentialMaterial{}, fmt.Errorf("cumulocity issuer: credential_ref %q was not found", ref)
+	}
+	return cfg, mat, nil
 }
 
 // SetIssuer is exposed for tests; production code uses ResolveIssuer.
@@ -165,12 +238,6 @@ func (c *Cumulocity) Build(ctx context.Context, device *store.Device) ([]protoco
 	}
 
 	externalID := externalIDFor(c, device)
-	// expiresAt was rendered as an extra v1-only payload field
-	// (`expires_at`); v2 carries only the token itself, so we discard
-	// the expiry. The token's TTL is still tracked server-side and the
-	// device exchanges it for a permanent cert immediately on first
-	// boot — long enough that a few seconds of clock drift between
-	// here and the device doesn't matter.
 	token, _, err := c.mintToken(ctx, externalID)
 	if err != nil {
 		return nil, fmt.Errorf("cumulocity: mint enrollment token for %s: %w", externalID, err)
@@ -213,17 +280,26 @@ func (c *Cumulocity) mintToken(ctx context.Context, externalID string) (string, 
 	if c.issuer == nil {
 		return "", time.Time{}, nil
 	}
-	ttl := time.Duration(c.TokenTTL)
+	return mintTokenFor(ctx, c.issuer, time.Duration(c.TokenTTL), externalID)
+}
+
+func mintTokenFor(ctx context.Context, iss c8yissuer.Issuer, ttl time.Duration, externalID string) (string, time.Time, error) {
+	if iss == nil {
+		return "", time.Time{}, nil
+	}
 	if ttl <= 0 {
 		ttl = 10 * time.Minute
 	}
-	return c.issuer.Mint(ctx, externalID, ttl)
+	return iss.Mint(ctx, externalID, ttl)
 }
 
 // RevokeForDevice is a convenience wrapper used by callers that want to
 // proactively invalidate a token (e.g. on bundle delivery failure).
 func (c *Cumulocity) RevokeForDevice(ctx context.Context, device *store.Device) error {
-	if c == nil || c.issuer == nil {
+	if c == nil {
+		return nil
+	}
+	if c.issuer == nil {
 		return nil
 	}
 	return c.issuer.Revoke(ctx, externalIDFor(c, device))

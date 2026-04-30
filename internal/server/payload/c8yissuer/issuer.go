@@ -103,6 +103,11 @@ type LocalConfig struct {
 	// environment variables instead. Keep this file on a tmpfs / mounted
 	// secret and do not check it in.
 	CredentialsFile string
+	// Username and Password allow callers (e.g. desktop keyring-backed flows)
+	// to provide credentials in-memory without relying on environment variables
+	// or an on-disk credentials file.
+	Username string
+	Password string
 	// Logger is used for non-secret operational logging (token sha256,
 	// outcomes). Must never log the plaintext token.
 	Logger *slog.Logger
@@ -179,6 +184,26 @@ func NewLocalIssuer(c LocalConfig) (*LocalIssuer, error) {
 		client = c8yapi.NewClient(c8yapi.ClientOptions{
 			BaseURL: baseURL,
 			Auth:    authentication.AuthOptions{Tenant: tenant, Username: user, Password: pass},
+			Timeout: 30 * time.Second,
+		})
+	} else if c.Username != "" || c.Password != "" {
+		if c.Username == "" || c.Password == "" {
+			return nil, errors.New("c8yissuer: username and password must both be set when using inline credentials")
+		}
+		baseURL := c.BaseURL
+		if baseURL == "" {
+			baseURL = authentication.HostFromEnvironment()
+		}
+		if baseURL == "" {
+			return nil, errors.New("c8yissuer: base_url is required when using inline credentials")
+		}
+		client = c8yapi.NewClient(c8yapi.ClientOptions{
+			BaseURL: baseURL,
+			Auth: authentication.AuthOptions{
+				Tenant:   c.Tenant,
+				Username: c.Username,
+				Password: c.Password,
+			},
 			Timeout: 30 * time.Second,
 		})
 	} else {

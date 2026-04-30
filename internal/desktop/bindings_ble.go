@@ -74,13 +74,13 @@ func (a *App) BleSupported() bool { return true }
 // device's perspective; if false (pending or rejected), no bundle was
 // written back and the device is still waiting / will time out.
 type BleEnrollResult struct {
-	Status           string `json:"status"`
-	Reason           string `json:"reason,omitempty"`
-	DeviceID         string `json:"deviceId,omitempty"`
-	DevicePublicKey  string `json:"devicePublicKey,omitempty"`
-	BundleDelivered  bool   `json:"bundleDelivered"`
-	EnvelopeBytes    int    `json:"envelopeBytes"`
-	BundleBytes      int    `json:"bundleBytes,omitempty"`
+	Status          string `json:"status"`
+	Reason          string `json:"reason,omitempty"`
+	DeviceID        string `json:"deviceId,omitempty"`
+	DevicePublicKey string `json:"devicePublicKey,omitempty"`
+	BundleDelivered bool   `json:"bundleDelivered"`
+	EnvelopeBytes   int    `json:"envelopeBytes"`
+	BundleBytes     int    `json:"bundleBytes,omitempty"`
 }
 
 // BleEnroll runs a single onboarding attempt against the first ZTP
@@ -116,7 +116,11 @@ func (a *App) BleEnroll(scanTimeoutMs int) (BleEnrollResult, error) {
 
 	enrollURL := a.handle.BaseURL + "/v1/enroll"
 	statusURL := a.handle.BaseURL + "/v1/enroll/status"
-	httpClient := &http.Client{Timeout: 30 * time.Second}
+	// Let per-request contexts govern deadline/cancellation. Using the same
+	// 30s client timeout as the server masks accepted-path engine failures
+	// (for example a downstream issuer timing out) with a local
+	// "Client.Timeout exceeded" before the server can send its 500 response.
+	httpClient := &http.Client{}
 
 	// progress fires a Wails event on every ble.Enroll milestone. The
 	// SPA's onMount subscribes via wruntime.EventsOn (in-webview JS)
@@ -141,7 +145,7 @@ func (a *App) BleEnroll(scanTimeoutMs int) (BleEnrollResult, error) {
 			res.DeviceID = id
 			res.DevicePublicKey = pubkey
 		}
-		bundle, status, reason, err := submitEnroll(httpClient, enrollURL, envelope)
+		bundle, status, reason, err := submitEnroll(ctx, httpClient, enrollURL, envelope)
 		if err != nil {
 			return nil, err
 		}
@@ -243,7 +247,7 @@ func waitForApproval(ctx context.Context, c *http.Client, statusURL, enrollURL, 
 			// when the request was queued for approval, so this goes
 			// through and returns the signed bundle.
 			progress("submitting", "approval received — fetching bundle")
-			bundle, status2, reason2, err := submitEnroll(c, enrollURL, envelope)
+			bundle, status2, reason2, err := submitEnroll(ctx, c, enrollURL, envelope)
 			if err != nil {
 				return nil, "", "", fmt.Errorf("re-submit after approval: %w", err)
 			}
@@ -264,8 +268,8 @@ func waitForApproval(ctx context.Context, c *http.Client, statusURL, enrollURL, 
 // submitEnroll POSTs the envelope to the local enroll endpoint and
 // returns the response bytes plus the parsed status/reason. The
 // envelope is authoritative-bytes; we don't re-encode it.
-func submitEnroll(c *http.Client, url string, envelope []byte) ([]byte, string, string, error) {
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(envelope))
+func submitEnroll(ctx context.Context, c *http.Client, url string, envelope []byte) ([]byte, string, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(envelope))
 	if err != nil {
 		return nil, "", "", fmt.Errorf("build request: %w", err)
 	}

@@ -8,11 +8,15 @@
   import { api } from '$lib/api';
   import {
     detect,
+    type C8YCredential,
     type DesktopRuntimeInfo,
+    wailsDeleteC8YCredential,
+    wailsListC8YCredentials,
     wailsListProfileFiles,
     wailsOpenConfigDirectory,
     wailsReadProfileFile,
     wailsRevealSealedProfile,
+    wailsSetC8YCredential,
     wailsSealProfileForSave,
     wailsWriteProfileFile
   } from '$lib/runtime';
@@ -21,6 +25,11 @@
   let err = $state<string | null>(null);
   let msg = $state<string | null>(null);
   let recipients = $state<string[]>([]);
+  let c8yCredentials = $state<C8YCredential[]>([]);
+  let credentialId = $state('');
+  let credentialURL = $state('');
+  let credentialUsername = $state('');
+  let credentialPassword = $state('');
   let selectedFile = $state('');
   let files = $state<string[]>([]);
   let content = $state('');
@@ -91,6 +100,45 @@
     }
   }
 
+  async function refreshC8YCredentials() {
+    const fn = wailsListC8YCredentials();
+    if (!fn) return;
+    try {
+      c8yCredentials = await fn();
+    } catch (e: any) {
+      err = `Could not list Cumulocity credentials: ${e.message ?? e}`;
+    }
+  }
+
+  async function saveC8YCredential() {
+    const fn = wailsSetC8YCredential();
+    if (!fn) return;
+    msg = null;
+    err = null;
+    try {
+      await fn(credentialId, credentialURL, credentialUsername, credentialPassword);
+      credentialPassword = '';
+      msg = `Saved credential ${credentialId}`;
+      await refreshC8YCredentials();
+    } catch (e: any) {
+      err = `Could not save Cumulocity credential: ${e.message ?? e}`;
+    }
+  }
+
+  async function deleteC8YCredential(id: string) {
+    const fn = wailsDeleteC8YCredential();
+    if (!fn) return;
+    msg = null;
+    err = null;
+    try {
+      await fn(id);
+      msg = `Deleted credential ${id}`;
+      await refreshC8YCredentials();
+    } catch (e: any) {
+      err = `Could not delete Cumulocity credential: ${e.message ?? e}`;
+    }
+  }
+
   async function openConfigDir() {
     const fn = wailsOpenConfigDirectory();
     if (!fn) return;
@@ -150,6 +198,7 @@
     initEditor();
     await loadDesktopContext();
     await loadRecipients();
+    await refreshC8YCredentials();
     await refreshFiles();
     initEditor();
   });
@@ -190,6 +239,61 @@
           <li><code>{r}</code></li>
         {/each}
       </ul>
+    {/if}
+  </section>
+
+  <section class="card">
+    <h3>Cumulocity Credentials</h3>
+    <p class="hint">Credentials are stored in the OS keyring. You can manage multiple entries and reference them from profile targets.</p>
+    <div class="grid">
+      <div class="field">
+        <label for="c8y-credential-id">Credential ID</label>
+        <input id="c8y-credential-id" bind:value={credentialId} placeholder="e.g. c8y-prod-eu" />
+      </div>
+      <div class="field">
+        <label for="c8y-credential-url">Cumulocity URL</label>
+        <input id="c8y-credential-url" bind:value={credentialURL} placeholder="https://example.cumulocity.com" />
+      </div>
+      <div class="field">
+        <label for="c8y-credential-user">Username</label>
+        <input id="c8y-credential-user" bind:value={credentialUsername} placeholder="service-user" />
+      </div>
+      <div class="field">
+        <label for="c8y-credential-password">Password</label>
+        <input id="c8y-credential-password" type="password" bind:value={credentialPassword} placeholder="••••••••" autocomplete="new-password" />
+      </div>
+    </div>
+    <div class="row">
+      <button onclick={saveC8YCredential}>Save Credential</button>
+      <button onclick={refreshC8YCredentials}>Refresh</button>
+    </div>
+    {#if c8yCredentials.length === 0}
+      <p class="warn">No stored Cumulocity credentials.</p>
+    {:else}
+      <table class="cred-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>URL</th>
+            <th>Username</th>
+            <th>Secret</th>
+            <th>Updated</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each c8yCredentials as c (c.id)}
+            <tr>
+              <td><code>{c.id}</code></td>
+              <td>{c.url || '-'}</td>
+              <td>{c.username || '-'}</td>
+              <td>{c.hasSecret ? 'stored' : 'missing'}</td>
+              <td>{c.updatedAt || '-'}</td>
+              <td><button onclick={() => deleteC8YCredential(c.id)}>Delete</button></td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
     {/if}
   </section>
 
@@ -242,6 +346,28 @@
     border-radius: 6px;
     padding: 0.45rem 0.55rem;
   }
+  input {
+    background: #0d1117;
+    color: #e6edf3;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 0.45rem 0.55rem;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.6rem;
+    margin-bottom: 0.6rem;
+  }
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .field label {
+    color: #8b949e;
+    font-size: 0.85rem;
+  }
   .editor-shell {
     width: 100%;
     min-height: 28rem;
@@ -278,6 +404,21 @@
   .warn { color: #f0883e; }
   .ok { color: #3fb950; }
   .err { color: #f85149; }
+  .cred-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 0.4rem;
+  }
+  .cred-table th,
+  .cred-table td {
+    border-bottom: 1px solid #30363d;
+    padding: 0.45rem;
+    text-align: left;
+  }
+  .cred-table th {
+    color: #8b949e;
+    font-weight: 600;
+  }
   code {
     background: #161b22;
     padding: 0.1rem 0.3rem;

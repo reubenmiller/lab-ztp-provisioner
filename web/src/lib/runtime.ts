@@ -39,6 +39,14 @@ export interface DesktopRuntimeInfo extends RuntimeInfo {
   bootstrappedFiles?: string[];
 }
 
+export interface C8YCredential {
+  id: string;
+  url?: string;
+  username?: string;
+  hasSecret: boolean;
+  updatedAt?: string;
+}
+
 let cached: RuntimeInfo | null = null;
 
 // Wails injects a Go binding at window.go.<package>.<Type>.<Method>.
@@ -71,6 +79,9 @@ type DesktopBindings = {
   RevealSealedProfile?: (content: string) => Promise<string>;
   SealProfile?: (content: string, encryptedRegex: string) => Promise<string>;
   SealProfileForSave?: (content: string) => Promise<string>;
+  ListC8YCredentials?: () => Promise<C8YCredential[]>;
+  SetC8YCredential?: (id: string, url: string, username: string, password: string) => Promise<void>;
+  DeleteC8YCredential?: (id: string) => Promise<void>;
 };
 
 function desktopBindings(): DesktopBindings | null {
@@ -104,6 +115,18 @@ export function wailsSealProfile(): ((content: string, encryptedRegex: string) =
 
 export function wailsSealProfileForSave(): ((content: string) => Promise<string>) | null {
   return desktopBindings()?.SealProfileForSave ?? null;
+}
+
+export function wailsListC8YCredentials(): (() => Promise<C8YCredential[]>) | null {
+  return desktopBindings()?.ListC8YCredentials ?? null;
+}
+
+export function wailsSetC8YCredential(): ((id: string, url: string, username: string, password: string) => Promise<void>) | null {
+  return desktopBindings()?.SetC8YCredential ?? null;
+}
+
+export function wailsDeleteC8YCredential(): ((id: string) => Promise<void>) | null {
+  return desktopBindings()?.DeleteC8YCredential ?? null;
 }
 
 export async function detect(): Promise<RuntimeInfo> {

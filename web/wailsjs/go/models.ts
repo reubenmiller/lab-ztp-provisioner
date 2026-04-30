@@ -24,6 +24,26 @@ export namespace desktop {
 	        this.bundleBytes = source["bundleBytes"];
 	    }
 	}
+	export class C8YCredential {
+	    id: string;
+	    url?: string;
+	    username?: string;
+	    hasSecret: boolean;
+	    updatedAt?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new C8YCredential(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.url = source["url"];
+	        this.username = source["username"];
+	        this.hasSecret = source["hasSecret"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	}
 	export class RuntimeInfo {
 	    mode: string;
 	    token: string;

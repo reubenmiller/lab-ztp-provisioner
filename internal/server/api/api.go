@@ -164,7 +164,11 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	resp, err := s.Engine.Enroll(ctx, &env)
 	if err != nil {
 		s.Logger.Error("enroll failed", "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		msg := "internal error"
+		if s.RuntimeMode == "desktop" {
+			msg = err.Error()
+		}
+		http.Error(w, msg, http.StatusInternalServerError)
 		return
 	}
 	status := http.StatusOK
