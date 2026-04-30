@@ -77,6 +77,7 @@ export const api = {
   deleteProfile: (name: string) =>
     call<void>('DELETE', `/v1/admin/profiles/${encodeURIComponent(name)}`),
   reloadProfiles: () => call<{ loaded: number }>('POST', '/v1/admin/profiles/reload'),
+  profileEncryptionKey: () => call<ProfileEncryptionKey>('GET', '/v1/admin/profiles/encryption-key'),
   // exportProfileURL builds the URL for a YAML download. Browsers can't
   // attach an Authorization header to <a download> navigation, so the
   // bearer token is passed as ?token=… (the admin auth middleware accepts
@@ -282,4 +283,9 @@ export interface ProfileWrite {
   priority?: number;
   selector?: Selector;
   payload?: PayloadSet;
+}
+
+export interface ProfileEncryptionKey {
+  alg: string;
+  recipients: string[];
 }

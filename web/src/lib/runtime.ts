@@ -28,6 +28,15 @@ export interface DesktopRuntimeInfo extends RuntimeInfo {
   token: string;
   baseURL: string;
   signingKey: string;
+  defaultSealRegex?: string;
+  configDir?: string;
+  configPath?: string;
+  adminTokenFile?: string;
+  signingKeyFile?: string;
+  ageKeyFile?: string;
+  profilesDir?: string;
+  firstRun?: boolean;
+  bootstrappedFiles?: string[];
 }
 
 let cached: RuntimeInfo | null = null;
@@ -52,6 +61,49 @@ function wailsBinding(): (() => Promise<DesktopRuntimeInfo>) | null {
 export function wailsSaveFile(): ((suggestedName: string, content: string) => Promise<string>) | null {
   const w = (window as unknown as { go?: { desktop?: { App?: { SaveFile?: (n: string, c: string) => Promise<string> } } } });
   return w.go?.desktop?.App?.SaveFile ?? null;
+}
+
+type DesktopBindings = {
+  OpenConfigDirectory?: () => Promise<void>;
+  ListProfileFiles?: () => Promise<string[]>;
+  ReadProfileFile?: (name: string) => Promise<string>;
+  WriteProfileFile?: (name: string, content: string) => Promise<void>;
+  RevealSealedProfile?: (content: string) => Promise<string>;
+  SealProfile?: (content: string, encryptedRegex: string) => Promise<string>;
+  SealProfileForSave?: (content: string) => Promise<string>;
+};
+
+function desktopBindings(): DesktopBindings | null {
+  const w = (window as unknown as { go?: { desktop?: { App?: DesktopBindings } } });
+  return w.go?.desktop?.App ?? null;
+}
+
+export function wailsOpenConfigDirectory(): (() => Promise<void>) | null {
+  return desktopBindings()?.OpenConfigDirectory ?? null;
+}
+
+export function wailsListProfileFiles(): (() => Promise<string[]>) | null {
+  return desktopBindings()?.ListProfileFiles ?? null;
+}
+
+export function wailsReadProfileFile(): ((name: string) => Promise<string>) | null {
+  return desktopBindings()?.ReadProfileFile ?? null;
+}
+
+export function wailsWriteProfileFile(): ((name: string, content: string) => Promise<void>) | null {
+  return desktopBindings()?.WriteProfileFile ?? null;
+}
+
+export function wailsRevealSealedProfile(): ((content: string) => Promise<string>) | null {
+  return desktopBindings()?.RevealSealedProfile ?? null;
+}
+
+export function wailsSealProfile(): ((content: string, encryptedRegex: string) => Promise<string>) | null {
+  return desktopBindings()?.SealProfile ?? null;
+}
+
+export function wailsSealProfileForSave(): ((content: string) => Promise<string>) | null {
+  return desktopBindings()?.SealProfileForSave ?? null;
 }
 
 export async function detect(): Promise<RuntimeInfo> {

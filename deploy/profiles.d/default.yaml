@@ -48,5 +48,5 @@ sops:
             -----END AGE ENCRYPTED FILE-----
     lastmodified: "2026-04-28T23:34:57Z"
     mac: ENC[AES256_GCM,data:kJ7qutaTYyEZXqx1Ytb2MWCdVuyGQIQuCf3e11jirj2jdEYAu45Wv14W9eu8TGIS6h8QEWsQH85PoantifykghyO8teYBPJ7ImMuA/7tu9MmbMSF7kgvQhSyTwEenRA8M5z1Z68YX+1CxbPYF2qMRO5s0BVvWZxpDGORZLPEf5Y=,iv:WILpmW7/QsZnx27dKflhHVeTUhXsBgX6YVn14d52cj0=,tag:OPKCQEGHNIU+6advAMIlEA==,type:str]
-    encrypted_regex: ^(password|bootstrap_token|.*token.*|.*secret.*)$
+    encrypted_regex: ^(password|bootstrap_token|static_token|.*secret.*)$
     version: 3.7.3

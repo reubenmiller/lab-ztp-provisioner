@@ -25,6 +25,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -67,9 +68,8 @@ func main() {
 	configPath := flag.String("config", "",
 		"path to a YAML config (e.g. deploy/config/ztp-app.yaml) "+
 			"to reuse the docker-compose stack's persistent state. "+
-			"When empty, the app looks for ./ztp-server.yaml in the "+
-			"working directory; if that's also missing, the app runs "+
-			"with a fresh in-memory store and ephemeral keys.")
+			"When empty, the app auto-initialises and uses a per-user "+
+			"config directory under os.UserConfigDir()/ztp-app.")
 	listenFlag := flag.String("listen", "",
 		"TCP listen address. Default 127.0.0.1:0 (loopback only, ephemeral port). "+
 			"Pass e.g. ':8080' to make the engine reachable from the LAN — needed "+
@@ -96,11 +96,28 @@ func main() {
 	slog.SetDefault(logger)
 
 	listenAddr := resolveListenAddr(*listenFlag, *mdnsFlag)
+	desktopPaths, err := resolveDesktopPaths(*configPath, logger)
+	if err != nil {
+		logger.Error("resolve desktop paths", "err", err)
+		os.Exit(1)
+	}
 
-	cfg, err := loadConfig(*configPath, *mdnsFlag, listenAddr, logger)
+	cfg, err := loadConfig(desktopPaths.ConfigPath, *mdnsFlag, listenAddr, logger)
 	if err != nil {
 		logger.Error("load config", "err", err)
 		os.Exit(1)
+	}
+	if desktopPaths.AdminTokenFile == "" {
+		desktopPaths.AdminTokenFile = cfg.AdminTokenFile
+	}
+	if desktopPaths.SigningKeyFile == "" {
+		desktopPaths.SigningKeyFile = cfg.SigningKeyFile
+	}
+	if desktopPaths.AgeKeyFile == "" {
+		desktopPaths.AgeKeyFile = cfg.AgeKeyFile
+	}
+	if desktopPaths.ProfilesDir == "" {
+		desktopPaths.ProfilesDir = cfg.ProfilesDir
 	}
 
 	token, err := generateAdminToken()
@@ -157,7 +174,16 @@ func main() {
 	proxy := httputil.NewSingleHostReverseProxy(loopbackURL)
 	proxy.FlushInterval = 100 * time.Millisecond
 
-	app := desktop.New(h)
+	app := desktop.New(h, desktop.RuntimeInfo{
+		ConfigDir:         desktopPaths.ConfigDir,
+		ConfigPath:        desktopPaths.ConfigPath,
+		AdminTokenFile:    desktopPaths.AdminTokenFile,
+		SigningKeyFile:    desktopPaths.SigningKeyFile,
+		AgeKeyFile:        desktopPaths.AgeKeyFile,
+		ProfilesDir:       desktopPaths.ProfilesDir,
+		FirstRun:          desktopPaths.FirstRun,
+		BootstrappedFiles: desktopPaths.BootstrappedFiles,
+	})
 
 	// SIGINT/SIGTERM handler runs alongside Wails' own window-close
 	// hook so the engine shuts down cleanly whether the user clicks
@@ -272,7 +298,7 @@ func printAppUsage(out io.Writer) {
 	fmt.Fprintln(out, "ZTP desktop — bundles the SPA, the engine, and a native BLE relay.")
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "Usage:")
-	fmt.Fprintln(out, "  ztp-app                       launch the GUI (uses ./ztp-server.yaml if present)")
+	fmt.Fprintln(out, "  ztp-app                       launch the GUI (auto-inits user config dir)")
 	fmt.Fprintln(out, "  ztp-app -config <path>        launch with the given config")
 	fmt.Fprintln(out, "  ztp-app init [dir]            scaffold a data directory and exit")
 	fmt.Fprintln(out, "  ztp-app -h | --help           show this help")
@@ -308,6 +334,53 @@ func resolveListenAddr(listenFlag string, mdns bool) string {
 	return "127.0.0.1:0"
 }
 
+type desktopPaths struct {
+	ConfigDir         string
+	ConfigPath        string
+	AdminTokenFile    string
+	SigningKeyFile    string
+	AgeKeyFile        string
+	ProfilesDir       string
+	FirstRun          bool
+	BootstrappedFiles []string
+}
+
+// resolveDesktopPaths determines where the desktop app should read
+// and persist configuration. With no explicit -config, the app uses
+// a stable per-user directory and runs initdir.Scaffold on every
+// startup (idempotent) so first-run and subsequent runs behave the
+// same regardless of current working directory.
+func resolveDesktopPaths(configPath string, logger *slog.Logger) (desktopPaths, error) {
+	if configPath != "" {
+		absConfig, err := filepath.Abs(configPath)
+		if err != nil {
+			return desktopPaths{}, fmt.Errorf("resolve -config path: %w", err)
+		}
+		return desktopPaths{ConfigDir: filepath.Dir(absConfig), ConfigPath: absConfig}, nil
+	}
+
+	root, err := os.UserConfigDir()
+	if err != nil {
+		return desktopPaths{}, fmt.Errorf("resolve user config dir: %w", err)
+	}
+	appDir := filepath.Join(root, "ztp-app")
+	res, err := initdir.Scaffold(initdir.Options{Dir: appDir, Logger: logger})
+	if err != nil {
+		return desktopPaths{}, fmt.Errorf("init desktop config dir: %w", err)
+	}
+	logger.Info("desktop data directory ready", "dir", res.Dir, "config", res.ConfigPath)
+	return desktopPaths{
+		ConfigDir:         res.Dir,
+		ConfigPath:        res.ConfigPath,
+		AdminTokenFile:    res.AdminTokenFile,
+		SigningKeyFile:    res.SigningKeyFile,
+		AgeKeyFile:        res.AgeKeyFile,
+		ProfilesDir:       filepath.Join(res.Dir, "profiles.d"),
+		FirstRun:          len(res.Created) > 0,
+		BootstrappedFiles: append([]string(nil), res.Created...),
+	}, nil
+}
+
 // loadConfig either loads a YAML file (when configPath is set, e.g.
 // pointed at deploy/config/ztp-app.yaml so the desktop app reuses
 // the docker stack's signing key, age key, SQLite DB, and profiles)
@@ -325,16 +398,6 @@ func resolveListenAddr(listenFlag string, mdns bool) string {
 // advertised port comes from listenAddr so the SRV record matches
 // what we actually bind.
 func loadConfig(configPath string, mdnsFlag bool, listenAddr string, logger *slog.Logger) (*config.Config, error) {
-	// Implicit default: when -config is not set, look for an
-	// init-scaffolded ztp-server.yaml in the working directory. If
-	// found, use it; otherwise fall back to ephemeral in-memory.
-	// This makes `cd <dir> && ztp-app` Just Work after `ztp-app init <dir>`.
-	if configPath == "" {
-		if _, err := os.Stat("ztp-server.yaml"); err == nil {
-			configPath = "ztp-server.yaml"
-			logger.Info("auto-detected local config", "path", configPath)
-		}
-	}
 	var cfg *config.Config
 	if configPath == "" {
 		cfg = &config.Config{

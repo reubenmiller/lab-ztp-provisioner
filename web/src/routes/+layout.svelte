@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import { getToken, setToken } from '$lib/api';
-  import { detect, type RuntimeInfo } from '$lib/runtime';
+  import { detect, type RuntimeInfo, type DesktopRuntimeInfo, wailsOpenConfigDirectory } from '$lib/runtime';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
   let { children } = $props();
@@ -14,6 +14,7 @@
     { href: '/allowlist', label: 'Allowlist' },
     { href: '/tokens', label: 'Tokens' },
     { href: '/profiles', label: 'Profiles' },
+    { href: '/config', label: 'Config/Secrets' },
     { href: '/audit', label: 'Audit' }
   ];
 
@@ -21,6 +22,10 @@
   let tokenInput = $state('');
   let tokenError = $state('');
   let runtimeInfo = $state<RuntimeInfo | null>(null);
+
+  const desktopRuntimeInfo = $derived(
+    runtimeInfo?.mode === 'desktop' ? (runtimeInfo as DesktopRuntimeInfo) : null
+  );
 
   function handleAuthRequired() {
     // In desktop mode the token comes from the Wails binding and a
@@ -70,6 +75,16 @@
   function changeToken() {
     needsLogin = true;
   }
+
+  async function openConfigDir() {
+    const fn = wailsOpenConfigDirectory();
+    if (!fn) return;
+    try {
+      await fn();
+    } catch (err) {
+      console.warn('open config directory failed', err);
+    }
+  }
 </script>
 
 {#if needsLogin}
@@ -101,6 +116,27 @@
       <button class="token-btn" onclick={changeToken} title="Change admin token">&#128274;</button>
     </nav>
   </header>
+
+  {#if desktopRuntimeInfo?.configDir}
+    <section class="desktop-config-notice">
+      <p>
+        Desktop config directory: <code>{desktopRuntimeInfo.configDir}</code>
+        <button class="open-config-btn" onclick={openConfigDir}>Open</button>
+      </p>
+      {#if desktopRuntimeInfo.configPath}
+        <p>
+          Config file: <code>{desktopRuntimeInfo.configPath}</code>
+        </p>
+      {/if}
+      {#if desktopRuntimeInfo.firstRun}
+        <p class="banner-title">First run complete: generated files are ready.</p>
+        {#if desktopRuntimeInfo.adminTokenFile}<p>Admin token file: <code>{desktopRuntimeInfo.adminTokenFile}</code></p>{/if}
+        {#if desktopRuntimeInfo.signingKeyFile}<p>Signing key file: <code>{desktopRuntimeInfo.signingKeyFile}</code></p>{/if}
+        {#if desktopRuntimeInfo.ageKeyFile}<p>Age key file: <code>{desktopRuntimeInfo.ageKeyFile}</code></p>{/if}
+        {#if desktopRuntimeInfo.profilesDir}<p>Profiles directory: <code>{desktopRuntimeInfo.profilesDir}</code></p>{/if}
+      {/if}
+    </section>
+  {/if}
 
   <main>{@render children()}</main>
 {/if}
@@ -143,6 +179,37 @@
     border-radius: 4px;
   }
   .token-btn:hover { background: #30363d; color: #e6edf3; }
+  .desktop-config-notice {
+    border-bottom: 1px solid #30363d;
+    background: #0f151d;
+    padding: 0.65rem 1.5rem;
+  }
+  .desktop-config-notice p {
+    margin: 0.2rem 0;
+    color: #b7c0c8;
+    font-size: 0.85rem;
+    line-height: 1.3;
+  }
+  .desktop-config-notice .banner-title {
+    margin-top: 0.55rem;
+    color: #e6edf3;
+    font-weight: 600;
+  }
+  .desktop-config-notice code {
+    color: #d2d9e0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  }
+  .open-config-btn {
+    margin-left: 0.45rem;
+    background: #21262d;
+    border: 1px solid #30363d;
+    color: #c9d1d9;
+    border-radius: 5px;
+    padding: 0.15rem 0.45rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+  .open-config-btn:hover { background: #30363d; }
   main { padding: 1.5rem; }
 
   /* login overlay */

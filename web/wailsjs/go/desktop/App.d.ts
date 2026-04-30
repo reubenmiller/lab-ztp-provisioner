@@ -12,8 +12,22 @@ export function Context():Promise<context.Context>;
 
 export function GetRuntimeInfo():Promise<desktop.RuntimeInfo>;
 
+export function ListProfileFiles():Promise<Array<string>>;
+
 export function OnSecondInstanceLaunch(arg1:options.SecondInstanceData):Promise<void>;
+
+export function OpenConfigDirectory():Promise<void>;
+
+export function ReadProfileFile(arg1:string):Promise<string>;
+
+export function RevealSealedProfile(arg1:string):Promise<string>;
 
 export function SaveFile(arg1:string,arg2:string):Promise<string>;
 
+export function SealProfile(arg1:string,arg2:string):Promise<string>;
+
+export function SealProfileForSave(arg1:string):Promise<string>;
+
 export function SetContext(arg1:context.Context):Promise<void>;
+
+export function WriteProfileFile(arg1:string,arg2:string):Promise<void>;

@@ -29,6 +29,15 @@ export namespace desktop {
 	    token: string;
 	    baseURL: string;
 	    signingKey: string;
+	    defaultSealRegex?: string;
+	    configDir?: string;
+	    configPath?: string;
+	    adminTokenFile?: string;
+	    signingKeyFile?: string;
+	    ageKeyFile?: string;
+	    profilesDir?: string;
+	    firstRun?: boolean;
+	    bootstrappedFiles?: string[];
 	    capabilities: string[];
 	
 	    static createFrom(source: any = {}) {
@@ -41,6 +50,15 @@ export namespace desktop {
 	        this.token = source["token"];
 	        this.baseURL = source["baseURL"];
 	        this.signingKey = source["signingKey"];
+	        this.defaultSealRegex = source["defaultSealRegex"];
+	        this.configDir = source["configDir"];
+	        this.configPath = source["configPath"];
+	        this.adminTokenFile = source["adminTokenFile"];
+	        this.signingKeyFile = source["signingKeyFile"];
+	        this.ageKeyFile = source["ageKeyFile"];
+	        this.profilesDir = source["profilesDir"];
+	        this.firstRun = source["firstRun"];
+	        this.bootstrappedFiles = source["bootstrappedFiles"];
 	        this.capabilities = source["capabilities"];
 	    }
 	}

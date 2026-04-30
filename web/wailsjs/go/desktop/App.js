@@ -18,14 +18,42 @@ export function GetRuntimeInfo() {
   return window['go']['desktop']['App']['GetRuntimeInfo']();
 }
 
+export function ListProfileFiles() {
+  return window['go']['desktop']['App']['ListProfileFiles']();
+}
+
 export function OnSecondInstanceLaunch(arg1) {
   return window['go']['desktop']['App']['OnSecondInstanceLaunch'](arg1);
+}
+
+export function OpenConfigDirectory() {
+  return window['go']['desktop']['App']['OpenConfigDirectory']();
+}
+
+export function ReadProfileFile(arg1) {
+  return window['go']['desktop']['App']['ReadProfileFile'](arg1);
+}
+
+export function RevealSealedProfile(arg1) {
+  return window['go']['desktop']['App']['RevealSealedProfile'](arg1);
 }
 
 export function SaveFile(arg1, arg2) {
   return window['go']['desktop']['App']['SaveFile'](arg1, arg2);
 }
 
+export function SealProfile(arg1, arg2) {
+  return window['go']['desktop']['App']['SealProfile'](arg1, arg2);
+}
+
+export function SealProfileForSave(arg1) {
+  return window['go']['desktop']['App']['SealProfileForSave'](arg1);
+}
+
 export function SetContext(arg1) {
   return window['go']['desktop']['App']['SetContext'](arg1);
+}
+
+export function WriteProfileFile(arg1, arg2) {
+  return window['go']['desktop']['App']['WriteProfileFile'](arg1, arg2);
 }

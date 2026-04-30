@@ -27,7 +27,7 @@ When nothing matches, enrollment is **rejected**.
   ```sh
   # First time: server publishes its public key on first start; ztpctl
   # fetches it from the admin API and seals every leaf matching the regex.
-  ztpctl secrets seal default.yaml --regex '^(password|bootstrap_token|.*token.*)$'
+  ztpctl secrets seal default.yaml --regex '^(password|bootstrap_token|static_token|.*secret.*)$'
 
   # Subsequent edits open the file in $EDITOR with plaintext; saving
   # re-encrypts using the same rules and recipients automatically.

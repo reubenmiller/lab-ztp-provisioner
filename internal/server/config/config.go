@@ -136,10 +136,12 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	baseDir := filepath.Dir(path)
 	var c Config
 	if err := yaml.Unmarshal(b, &c); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
+	c.resolveRelativePaths(baseDir)
 	if c.Listen == "" {
 		c.Listen = ":8080"
 	}
@@ -150,6 +152,39 @@ func Load(path string) (*Config, error) {
 		c.MDNS.Service = "_ztp._tcp"
 	}
 	return &c, nil
+}
+
+func (c *Config) resolveRelativePaths(baseDir string) {
+	c.AdminTokenFile = resolvePath(baseDir, c.AdminTokenFile)
+	c.SigningKeyFile = resolvePath(baseDir, c.SigningKeyFile)
+	c.AgeKeyFile = resolvePath(baseDir, c.AgeKeyFile)
+	c.ProfilesDir = resolvePath(baseDir, c.ProfilesDir)
+	c.TLS.Cert = resolvePath(baseDir, c.TLS.Cert)
+	c.TLS.Key = resolvePath(baseDir, c.TLS.Key)
+	c.Web.Dir = resolvePath(baseDir, c.Web.Dir)
+
+	// SQLite DSN is usually a filesystem path. Keep URI-like and
+	// special in-memory DSNs untouched.
+	if strings.EqualFold(c.Store.Driver, "sqlite") && isLikelyFilePathDSN(c.Store.DSN) {
+		c.Store.DSN = resolvePath(baseDir, c.Store.DSN)
+	}
+}
+
+func resolvePath(baseDir, p string) string {
+	if p == "" || filepath.IsAbs(p) {
+		return p
+	}
+	return filepath.Clean(filepath.Join(baseDir, p))
+}
+
+func isLikelyFilePathDSN(dsn string) bool {
+	if dsn == "" || dsn == ":memory:" {
+		return false
+	}
+	if strings.HasPrefix(strings.ToLower(dsn), "file:") {
+		return false
+	}
+	return true
 }
 
 // LoadOrCreateSigningKey returns the Ed25519 signing key, in order of
