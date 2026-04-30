@@ -12,9 +12,12 @@ package desktop
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
+	"strings"
 	"sync"
 
+	"github.com/wailsapp/wails/v2/pkg/options"
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server/runtime"
@@ -60,6 +63,17 @@ func (a *App) Context() context.Context {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.ctx
+}
+
+// OnSecondInstanceLaunch prevent a second instance from launching
+func (a *App) OnSecondInstanceLaunch(secondInstanceData options.SecondInstanceData) {
+	secondInstanceArgs := secondInstanceData.Args
+
+	ctx := a.Context()
+	slog.Info("user opened second instance", "args", strings.Join(secondInstanceData.Args, ","), "workingDir", secondInstanceData.WorkingDirectory)
+	wruntime.WindowUnminimise(ctx)
+	wruntime.Show(ctx)
+	go wruntime.EventsEmit(ctx, "launchArgs", secondInstanceArgs)
 }
 
 // RuntimeInfo is what the SPA reads at boot in desktop mode. It

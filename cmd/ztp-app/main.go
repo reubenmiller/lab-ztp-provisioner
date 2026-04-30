@@ -178,7 +178,7 @@ func main() {
 	}()
 
 	if err := wails.Run(&options.App{
-		Title:  "ZTP",
+		Title:  "Zero-Touch Provisioning",
 		Width:  1280,
 		Height: 800,
 		AssetServer: &assetserver.Options{
@@ -190,6 +190,10 @@ func main() {
 				Message: "Onboard devices automatically via mDNS or BLE.",
 				Icon:    appIcon,
 			},
+		},
+		SingleInstanceLock: &options.SingleInstanceLock{
+			UniqueId:               "e102d773-d8e6-47b2-a250-75c643bc3414",
+			OnSecondInstanceLaunch: app.OnSecondInstanceLaunch,
 		},
 		OnStartup: func(wctx context.Context) {
 			// Stash the Wails-supplied context so binding methods

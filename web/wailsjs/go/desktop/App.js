@@ -18,6 +18,10 @@ export function GetRuntimeInfo() {
   return window['go']['desktop']['App']['GetRuntimeInfo']();
 }
 
+export function OnSecondInstanceLaunch(arg1) {
+  return window['go']['desktop']['App']['OnSecondInstanceLaunch'](arg1);
+}
+
 export function SaveFile(arg1, arg2) {
   return window['go']['desktop']['App']['SaveFile'](arg1, arg2);
 }
