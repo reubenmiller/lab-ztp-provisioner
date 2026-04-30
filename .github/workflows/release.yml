@@ -257,7 +257,7 @@ jobs:
         env:
           DPKG_ARCH: ${{ matrix.dpkg_arch }}
         run: |
-          set -euo pipefail
+          set -exuo pipefail
           if [[ "$DPKG_ARCH" != "amd64" ]]; then
             sudo dpkg --add-architecture "$DPKG_ARCH"
 
@@ -283,7 +283,7 @@ jobs:
           PKG_CONFIG_ALLOW_CROSS: '1'
           PKG_CONFIG_PATH: ${{ matrix.dpkg_arch == 'amd64' && '/usr/lib/x86_64-linux-gnu/pkgconfig' || matrix.dpkg_arch == 'arm64' && '/usr/lib/aarch64-linux-gnu/pkgconfig' || matrix.dpkg_arch == 'armhf' && '/usr/lib/arm-linux-gnueabihf/pkgconfig' || '' }}
         run: |
-          set -euo pipefail
+          set -exuo pipefail
           cargo zigbuild --release --target "${{ matrix.target }}" --features "${{ matrix.features }}"
 
       - name: Stage + archive binary
