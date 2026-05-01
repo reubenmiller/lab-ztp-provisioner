@@ -50,6 +50,19 @@ func NewFileLoader(dir string, logger *slog.Logger) *FileLoader {
 	}
 }
 
+// NewStaticLoader returns a FileLoader whose snapshot is pre-populated with
+// the supplied profiles. Load() is a no-op. Useful in tests and anywhere an
+// in-memory profile set is needed without touching the filesystem.
+func NewStaticLoader(ps []Profile) *FileLoader {
+	m := make(map[string]Profile, len(ps))
+	for _, p := range ps {
+		m[p.Name] = p
+	}
+	return &FileLoader{
+		profiles: m,
+	}
+}
+
 // Load (re-)reads every *.yaml / *.yml file in Dir. On success the new map
 // atomically replaces the previous one. Per-file errors are logged but do
 // not abort the load — operators can fix one broken file without taking

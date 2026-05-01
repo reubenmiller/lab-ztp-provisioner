@@ -3,7 +3,6 @@ package profiles
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server/payload"
@@ -14,14 +13,6 @@ import (
 // no default is configured. The engine surfaces it as an enrollment-time
 // rejection.
 var ErrNoProfile = errors.New("no profile matched and no default configured")
-
-// ProfileStore is the subset of store.Store the resolver needs. Defined
-// here (rather than imported from store) to keep the package's import
-// surface minimal and avoid an import cycle with store → trust → profiles.
-type ProfileStore interface {
-	ListProfiles(ctx context.Context) ([]Profile, error)
-	GetProfile(ctx context.Context, name string) (*Profile, error)
-}
 
 // ResolveHints carries verifier-supplied profile selection hints. Verifiers
 // (allowlist, bootstrap_token, …) populate it during Verify; the engine
@@ -48,87 +39,43 @@ type ResolveHints struct {
 	Requested string
 }
 
-// Resolver merges the file and DB profile sources, resolves a per-device
+// Resolver merges file profiles and resolves a per-device
 // profile via the precedence chain, and instantiates a payload.Registry on
 // demand.
 //
-// Safe for concurrent use. The file loader's snapshot is read under RLock;
-// the DB store is the caller's responsibility (typically the SQL store
-// already serialises writes).
+// Safe for concurrent use. The file loader's snapshot is read under RLock.
 type Resolver struct {
 	File           *FileLoader
-	Store          ProfileStore
 	DefaultProfile string
 	Logger         *slog.Logger
 }
 
-// NewResolver returns a Resolver with the supplied components. Either
-// loader is optional but at least one source must produce profiles or
-// resolution will always fall through to the default.
-func NewResolver(fileLoader *FileLoader, store ProfileStore, defaultProfile string, logger *slog.Logger) *Resolver {
+// NewResolver returns a Resolver with the supplied file loader.
+func NewResolver(fileLoader *FileLoader, defaultProfile string, logger *slog.Logger) *Resolver {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Resolver{
 		File:           fileLoader,
-		Store:          store,
 		DefaultProfile: defaultProfile,
 		Logger:         logger,
 	}
 }
 
-// List returns the merged profile set: every file profile plus every DB
-// profile NOT shadowed by a file profile of the same name. Sorted by
-// (priority desc, name asc).
-//
-// Each returned profile carries its Source so the API/UI can surface the
-// editability rules.
+// List returns all file-backed profiles, sorted by (priority desc, name asc).
 func (r *Resolver) List(ctx context.Context) ([]Profile, error) {
-	var fileSet []Profile
+	var out []Profile
 	if r.File != nil {
-		fileSet = r.File.Snapshot()
-	}
-	seen := make(map[string]struct{}, len(fileSet))
-	out := make([]Profile, 0, len(fileSet))
-	for _, p := range fileSet {
-		out = append(out, p)
-		seen[p.Name] = struct{}{}
-	}
-	if r.Store != nil {
-		dbList, err := r.Store.ListProfiles(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("list db profiles: %w", err)
-		}
-		for _, p := range dbList {
-			if _, dup := seen[p.Name]; dup {
-				// File source wins; the API will surface the duplicate as a
-				// warning so the operator can rename or delete the DB copy.
-				continue
-			}
-			p.Source = SourceDB
-			out = append(out, p)
-		}
+		out = r.File.Snapshot()
 	}
 	sortByPriority(out)
 	return out, nil
 }
 
-// Get returns the named profile from the merged set. File profiles shadow
-// DB profiles. Returns nil, nil when the name doesn't exist (the caller
-// decides whether that's an error).
+// Get returns the named profile from the file loader.
 func (r *Resolver) Get(ctx context.Context, name string) (*Profile, error) {
 	if r.File != nil {
 		if p := r.File.Get(name); p != nil {
-			return p, nil
-		}
-	}
-	if r.Store != nil {
-		p, err := r.Store.GetProfile(ctx, name)
-		if err != nil {
-			return nil, err
-		}
-		if p != nil {
-			p.Source = SourceDB
 			return p, nil
 		}
 	}

@@ -108,27 +108,10 @@ func TestEndToEnd_HTTPSAllowlist(t *testing.T) {
 func newE2EResolver(wifi *payload.WiFi) *profiles.Resolver {
 	prof := profiles.Profile{
 		Name:    profiles.DefaultName,
-		Source:  profiles.SourceDB,
+		Source:  profiles.SourceFile,
 		Payload: &payload.Set{WiFi: wifi},
 	}
-	return profiles.NewResolver(nil, &e2eStaticStore{m: map[string]profiles.Profile{prof.Name: prof}}, profiles.DefaultName, nil)
-}
-
-type e2eStaticStore struct{ m map[string]profiles.Profile }
-
-func (s *e2eStaticStore) ListProfiles(_ context.Context) ([]profiles.Profile, error) {
-	out := make([]profiles.Profile, 0, len(s.m))
-	for _, p := range s.m {
-		out = append(out, p)
-	}
-	return out, nil
-}
-
-func (s *e2eStaticStore) GetProfile(_ context.Context, name string) (*profiles.Profile, error) {
-	if p, ok := s.m[name]; ok {
-		return &p, nil
-	}
-	return nil, nil
+	return profiles.NewResolver(profiles.NewStaticLoader([]profiles.Profile{prof}), profiles.DefaultName, nil)
 }
 
 // TestEndToEnd_PendingThenApprove walks an unknown device through the manual

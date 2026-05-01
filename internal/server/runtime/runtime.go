@@ -15,7 +15,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -122,8 +121,7 @@ func Start(ctx context.Context, opts Options) (*Handle, error) {
 	} else if cfg.ProfilesDir != "" {
 		logger.Info("profiles loaded from disk", "dir", cfg.ProfilesDir, "count", n)
 	}
-	profileStore := newProfileStoreAdapter(st, logger)
-	resolver := profiles.NewResolver(fileLoader, profileStore, cfg.DefaultProfile, logger)
+	resolver := profiles.NewResolver(fileLoader, cfg.DefaultProfile, logger)
 	if err := resolveAllIssuers(ctx, resolver, logger); err != nil {
 		return nil, fmt.Errorf("profile cumulocity issuer: %w", err)
 	}
@@ -157,6 +155,8 @@ func Start(ctx context.Context, opts Options) (*Handle, error) {
 		Resolver:             resolver,
 		ProfileLoader:        fileLoader,
 		EncryptionRecipients: buildEncryptionRecipients(ageIdentity, cfg.AgeRecipients),
+		ProfilesDir:          cfg.ProfilesDir,
+		AgeIdentity:          ageIdentity,
 	}
 	if len(opts.AgentScript) > 0 {
 		apiSrv.AgentScript = opts.AgentScript
@@ -408,69 +408,7 @@ func buildVerifiers(names []string, st store.Store) (trust.Chain, error) {
 	return chain, nil
 }
 
-// profileStoreAdapter adapts store.Store (which deals in opaque
-// ProfileRecord blobs) to profiles.ProfileStore (which deals in
-// typed Profile values). Lives here to avoid an import cycle between
-// store and profiles.
-type profileStoreAdapter struct {
-	st     store.Store
-	logger *slog.Logger
-}
-
-func newProfileStoreAdapter(st store.Store, logger *slog.Logger) *profileStoreAdapter {
-	return &profileStoreAdapter{st: st, logger: logger}
-}
-
-func (a *profileStoreAdapter) ListProfiles(ctx context.Context) ([]profiles.Profile, error) {
-	recs, err := a.st.ListProfiles(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]profiles.Profile, 0, len(recs))
-	for _, r := range recs {
-		p, err := decodeProfileRecord(r)
-		if err != nil {
-			a.logger.Warn("skipping unreadable DB profile", "name", r.Name, "err", err)
-			continue
-		}
-		out = append(out, p)
-	}
-	return out, nil
-}
-
-func (a *profileStoreAdapter) GetProfile(ctx context.Context, name string) (*profiles.Profile, error) {
-	r, err := a.st.GetProfile(ctx, name)
-	if err != nil {
-		return nil, err
-	}
-	if r == nil {
-		return nil, nil
-	}
-	p, err := decodeProfileRecord(*r)
-	if err != nil {
-		return nil, err
-	}
-	return &p, nil
-}
-
-func decodeProfileRecord(r store.ProfileRecord) (profiles.Profile, error) {
-	var p profiles.Profile
-	if len(r.BodyJSON) > 0 {
-		if err := json.Unmarshal(r.BodyJSON, &p); err != nil {
-			return profiles.Profile{}, fmt.Errorf("decode profile %q: %w", r.Name, err)
-		}
-	}
-	p.Name = r.Name
-	if p.Description == "" {
-		p.Description = r.Description
-	}
-	p.Source = profiles.SourceDB
-	p.UpdatedAt = r.UpdatedAt
-	p.UpdatedBy = r.UpdatedBy
-	return p, nil
-}
-
-// resolveAllIssuers walks every loaded profile (file + DB) and runs
+// resolveAllIssuers walks every loaded profile and runs
 // Cumulocity.ResolveIssuer on the ones that have a c8y payload.
 // Keeps the c8y bootstrap-token issuer fully wired before any device
 // tries to enroll.

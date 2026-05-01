@@ -68,14 +68,9 @@ export const api = {
   revokeToken: (id: string) => call<void>('DELETE', `/v1/admin/tokens/${id}`),
   audit: (limit = 100) => call<AuditEntry[]>('GET', `/v1/admin/audit?limit=${limit}`),
 
-  // Provisioning profiles.
+  // Provisioning profiles (read-only via API; edit via Config/Secrets).
   profiles: () => call<ProfileSummary[]>('GET', '/v1/admin/profiles'),
   profile: (name: string) => call<Profile>('GET', `/v1/admin/profiles/${encodeURIComponent(name)}`),
-  createProfile: (p: ProfileWrite) => call<void>('POST', '/v1/admin/profiles', p),
-  updateProfile: (name: string, p: ProfileWrite) =>
-    call<void>('PUT', `/v1/admin/profiles/${encodeURIComponent(name)}`, p),
-  deleteProfile: (name: string) =>
-    call<void>('DELETE', `/v1/admin/profiles/${encodeURIComponent(name)}`),
   reloadProfiles: () => call<{ loaded: number }>('POST', '/v1/admin/profiles/reload'),
   profileEncryptionKey: () => call<ProfileEncryptionKey>('GET', '/v1/admin/profiles/encryption-key'),
   // exportProfileURL builds the URL for a YAML download. Browsers can't
@@ -87,6 +82,54 @@ export const api = {
     const t = getToken();
     if (t) url.searchParams.set('token', t);
     return url.toString();
+  },
+
+  // Config-file management (profiles_dir filesystem CRUD + seal/reveal).
+  configFiles: () => call<string[]>('GET', '/v1/admin/config/files'),
+  configFileGet: (name: string) => {
+    const token = getToken();
+    return fetch(`/v1/admin/config/files/${encodeURIComponent(name)}`, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) }
+    }).then(async (res) => {
+      if (res.status === 401) { clearToken(); window.dispatchEvent(new CustomEvent('ztp:auth-required')); throw new AuthError('401'); }
+      if (!res.ok) { const t = await res.text(); throw new Error(t); }
+      return res.text();
+    });
+  },
+  configFilePut: (name: string, content: string) => {
+    const token = getToken();
+    return fetch(`/v1/admin/config/files/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/plain', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: content
+    }).then(async (res) => {
+      if (res.status === 401) { clearToken(); window.dispatchEvent(new CustomEvent('ztp:auth-required')); throw new AuthError('401'); }
+      if (!res.ok) { const t = await res.text(); throw new Error(t); }
+    });
+  },
+  configSeal: (content: string) => {
+    const token = getToken();
+    return fetch('/v1/admin/config/seal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: content
+    }).then(async (res) => {
+      if (res.status === 401) { clearToken(); window.dispatchEvent(new CustomEvent('ztp:auth-required')); throw new AuthError('401'); }
+      if (!res.ok) { const t = await res.text(); throw new Error(t); }
+      return res.text();
+    });
+  },
+  configReveal: (content: string) => {
+    const token = getToken();
+    return fetch('/v1/admin/config/reveal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: content
+    }).then(async (res) => {
+      if (res.status === 401) { clearToken(); window.dispatchEvent(new CustomEvent('ztp:auth-required')); throw new AuthError('401'); }
+      if (!res.ok) { const t = await res.text(); throw new Error(t); }
+      return res.text();
+    });
   },
 
   // Server-Sent Events stream of newly pending requests.

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"filippo.io/age"
+
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server"
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server/store"
 	"github.com/thin-edge/tedge-zerotouch-provisioning/pkg/protocol"
@@ -41,6 +43,14 @@ type Server struct {
 	// decrypt for. The first entry is conventionally the server's own
 	// public key; additional entries come from age_recipients in config.
 	EncryptionRecipients []string
+
+	// ProfilesDir is the filesystem path to the directory that holds profile
+	// YAML files. When set, the config-file management API is registered.
+	ProfilesDir string
+
+	// AgeIdentity is the server's age private key, used by the config-file
+	// reveal endpoint to decrypt SOPS-age sealed profiles.
+	AgeIdentity *age.X25519Identity
 
 	// SPA, when non-nil, is registered as the catch-all handler for
 	// non-API GET requests. The runtime sets it to the embedded
@@ -94,6 +104,9 @@ func (s *Server) Routes() http.Handler {
 
 	if s.Resolver != nil {
 		s.registerProfileRoutes(admin)
+	}
+	if s.ProfilesDir != "" {
+		s.registerConfigFileRoutes(admin)
 	}
 	if s.Hub != nil {
 		admin.HandleFunc("GET /v1/admin/pending/stream", s.Hub.ServeWS)

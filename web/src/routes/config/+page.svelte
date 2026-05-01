@@ -22,6 +22,8 @@
   } from '$lib/runtime';
 
   let desktop = $state<DesktopRuntimeInfo | null>(null);
+  // null = probing, true = available, false = not configured
+  let configApiAvailable = $state<boolean | null>(null);
   let err = $state<string | null>(null);
   let msg = $state<string | null>(null);
   let recipients = $state<string[]>([]);
@@ -90,13 +92,25 @@
   }
 
   async function refreshFiles() {
+    // Desktop mode: use Wails binding.
     const listFn = wailsListProfileFiles();
-    if (!listFn) return;
+    if (listFn) {
+      try {
+        files = await listFn();
+        if (files.length > 0 && !selectedFile) selectedFile = files[0];
+        configApiAvailable = true;
+      } catch (e: any) {
+        err = `Could not list profile files: ${e.message ?? e}`;
+      }
+      return;
+    }
+    // Server mode: use REST API.
     try {
-      files = await listFn();
+      files = await api.configFiles();
       if (files.length > 0 && !selectedFile) selectedFile = files[0];
+      configApiAvailable = true;
     } catch (e: any) {
-      err = `Could not list profile files: ${e.message ?? e}`;
+      configApiAvailable = false;
     }
   }
 
@@ -151,12 +165,22 @@
 
   async function loadFile() {
     if (!selectedFile) return;
-    const fn = wailsReadProfileFile();
-    if (!fn) return;
     msg = null;
     err = null;
+    // Desktop mode.
+    const fn = wailsReadProfileFile();
+    if (fn) {
+      try {
+        setEditorContent(await fn(selectedFile));
+        msg = `Loaded ${selectedFile}`;
+      } catch (e: any) {
+        err = `Could not read file: ${e.message ?? e}`;
+      }
+      return;
+    }
+    // Server mode.
     try {
-      setEditorContent(await fn(selectedFile));
+      setEditorContent(await api.configFileGet(selectedFile));
       msg = `Loaded ${selectedFile}`;
     } catch (e: any) {
       err = `Could not read file: ${e.message ?? e}`;
@@ -165,16 +189,27 @@
 
   async function saveFile() {
     if (!selectedFile) return;
-    const sealForSaveFn = wailsSealProfileForSave();
-    const fn = wailsWriteProfileFile();
-    if (!fn || !sealForSaveFn) return;
     msg = null;
     err = null;
+    // Desktop mode: seal locally then write.
+    const sealForSaveFn = wailsSealProfileForSave();
+    const writeFn = wailsWriteProfileFile();
+    if (sealForSaveFn && writeFn) {
+      try {
+        const sealed = await sealForSaveFn(getEditorContent());
+        setEditorContent(sealed);
+        await writeFn(selectedFile, sealed);
+        msg = `Saved ${selectedFile} (sealed)`;
+        await refreshFiles();
+      } catch (e: any) {
+        err = `Could not write file: ${e.message ?? e}`;
+      }
+      return;
+    }
+    // Server mode: server auto-seals on PUT.
     try {
-      const sealed = await sealForSaveFn(getEditorContent());
-      setEditorContent(sealed);
-      await fn(selectedFile, sealed);
-      msg = `Saved ${selectedFile} (sealed)`;
+      await api.configFilePut(selectedFile, getEditorContent());
+      msg = `Saved ${selectedFile}`;
       await refreshFiles();
     } catch (e: any) {
       err = `Could not write file: ${e.message ?? e}`;
@@ -182,12 +217,22 @@
   }
 
   async function reveal() {
-    const fn = wailsRevealSealedProfile();
-    if (!fn) return;
     msg = null;
     err = null;
+    // Desktop mode.
+    const fn = wailsRevealSealedProfile();
+    if (fn) {
+      try {
+        setEditorContent(await fn(getEditorContent()));
+        msg = 'Revealed decrypted YAML in the editor';
+      } catch (e: any) {
+        err = `Reveal failed: ${e.message ?? e}`;
+      }
+      return;
+    }
+    // Server mode.
     try {
-      setEditorContent(await fn(getEditorContent()));
+      setEditorContent(await api.configReveal(getEditorContent()));
       msg = 'Revealed decrypted YAML in the editor';
     } catch (e: any) {
       err = `Reveal failed: ${e.message ?? e}`;
@@ -195,16 +240,14 @@
   }
 
   onMount(async () => {
-    initEditor();
     await loadDesktopContext();
     await loadRecipients();
     await refreshC8YCredentials();
     await refreshFiles();
-    initEditor();
   });
 
   $effect(() => {
-    if (desktop && editorHost && !editorView) {
+    if (editorHost && !editorView) {
       initEditor();
     }
   });
@@ -217,9 +260,7 @@
 
 <h2>Config and Secrets</h2>
 
-{#if desktop == null}
-  <p class="warn">This page is only available in the desktop app.</p>
-{:else}
+{#if desktop != null}
   <section class="card">
     <h3>Storage</h3>
     <p>Config directory: <code>{desktop.configDir ?? 'n/a'}</code></p>
@@ -227,21 +268,23 @@
     <p>Age key file: <code>{desktop.ageKeyFile ?? 'n/a'}</code></p>
     <button onclick={openConfigDir}>Open Config Directory</button>
   </section>
+{/if}
 
-  <section class="card">
-    <h3>Encryption Recipients</h3>
-    <p>Recipients are loaded from the admin API endpoint used by ztpctl.</p>
-    {#if recipients.length === 0}
-      <p class="warn">No recipients found.</p>
-    {:else}
-      <ul>
-        {#each recipients as r (r)}
-          <li><code>{r}</code></li>
-        {/each}
-      </ul>
-    {/if}
-  </section>
+<section class="card">
+  <h3>Encryption Recipients</h3>
+  <p>Recipients are loaded from the admin API endpoint used by ztpctl.</p>
+  {#if recipients.length === 0}
+    <p class="warn">No recipients found.</p>
+  {:else}
+    <ul>
+      {#each recipients as r (r)}
+        <li><code>{r}</code></li>
+      {/each}
+    </ul>
+  {/if}
+</section>
 
+{#if desktop != null}
   <section class="card">
     <h3>Cumulocity Credentials</h3>
     <p class="hint">Credentials are stored in the OS keyring. You can manage multiple entries and reference them from profile targets.</p>
@@ -296,7 +339,13 @@
       </table>
     {/if}
   </section>
+{/if}
 
+{#if configApiAvailable === false}
+  <section class="card">
+    <p class="warn">Profile file management is not available. Set <code>profiles_dir</code> in <code>ztp-server.yaml</code> to enable it.</p>
+  </section>
+{:else}
   <section class="card">
     <h3>Profile File Editor</h3>
     <div class="row">
@@ -316,7 +365,7 @@
     </div>
     <p class="hint">
       Save always seals automatically (tag-based when present, otherwise default regex).
-      Default regex mode uses <code>{desktop.defaultSealRegex ?? 'n/a'}</code>.
+      {#if desktop != null}Default regex: <code>{desktop.defaultSealRegex ?? 'n/a'}</code>.{/if}
     </p>
   </section>
 {/if}

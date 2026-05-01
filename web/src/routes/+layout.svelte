@@ -13,7 +13,6 @@
     { href: '/devices', label: 'Devices' },
     { href: '/allowlist', label: 'Allowlist' },
     { href: '/tokens', label: 'Tokens' },
-    { href: '/profiles', label: 'Profiles' },
     { href: '/config', label: 'Config/Secrets' },
     { href: '/audit', label: 'Audit' }
   ];

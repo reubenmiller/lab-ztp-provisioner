@@ -85,19 +85,6 @@ type AuditEntry struct {
 	Details  string    `json:"details,omitempty"`
 }
 
-// ProfileRecord is the storage row for a DB-backed provisioning profile.
-// The store is intentionally schema-agnostic: it just holds an opaque JSON
-// blob. The profiles package decodes it into a typed Profile and is the
-// only consumer that knows the schema. Keeping the boundary narrow lets us
-// evolve the profile schema without altering migration code.
-type ProfileRecord struct {
-	Name        string    `json:"name"`
-	Description string    `json:"description,omitempty"`
-	BodyJSON    []byte    `json:"body"` // marshalled profiles.Profile
-	UpdatedAt   time.Time `json:"updated_at"`
-	UpdatedBy   string    `json:"updated_by,omitempty"`
-}
-
 // Store is the persistence interface used by the server.
 //
 // All methods take context so implementations can support cancellation and
@@ -139,14 +126,6 @@ type Store interface {
 	// Audit
 	AppendAudit(ctx context.Context, e AuditEntry) error
 	ListAudit(ctx context.Context, limit int) ([]AuditEntry, error)
-
-	// Profiles (DB-backed provisioning profiles; file-backed profiles live
-	// outside the store entirely). The store treats the profile body as an
-	// opaque JSON blob.
-	UpsertProfile(ctx context.Context, p ProfileRecord) error
-	GetProfile(ctx context.Context, name string) (*ProfileRecord, error)
-	ListProfiles(ctx context.Context) ([]ProfileRecord, error)
-	DeleteProfile(ctx context.Context, name string) error
 }
 
 // Memory is an in-memory Store. Safe for concurrent use.
@@ -159,7 +138,6 @@ type Memory struct {
 	tokensByID map[string]string         // id -> hash
 	nonces     map[string]time.Time
 	audit      []AuditEntry
-	profiles   map[string]ProfileRecord
 }
 
 // NewMemory returns an empty in-memory store.
@@ -171,7 +149,6 @@ func NewMemory() *Memory {
 		tokens:     map[string]BootstrapToken{},
 		tokensByID: map[string]string{},
 		nonces:     map[string]time.Time{},
-		profiles:   map[string]ProfileRecord{},
 	}
 }
 
@@ -400,57 +377,4 @@ func (m *Memory) ListAudit(_ context.Context, limit int) ([]AuditEntry, error) {
 	out := make([]AuditEntry, limit)
 	copy(out, m.audit[len(m.audit)-limit:])
 	return out, nil
-}
-
-// --- Profiles ---
-
-func (m *Memory) UpsertProfile(_ context.Context, p ProfileRecord) error {
-	if p.Name == "" {
-		return errors.New("profile name is required")
-	}
-	if p.UpdatedAt.IsZero() {
-		p.UpdatedAt = time.Now().UTC()
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	// Defensive copy of the body so the caller can't mutate it after-the-fact.
-	body := make([]byte, len(p.BodyJSON))
-	copy(body, p.BodyJSON)
-	p.BodyJSON = body
-	m.profiles[p.Name] = p
-	return nil
-}
-
-func (m *Memory) GetProfile(_ context.Context, name string) (*ProfileRecord, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	p, ok := m.profiles[name]
-	if !ok {
-		return nil, ErrNotFound
-	}
-	cp := p
-	cp.BodyJSON = append([]byte(nil), p.BodyJSON...)
-	return &cp, nil
-}
-
-func (m *Memory) ListProfiles(_ context.Context) ([]ProfileRecord, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	out := make([]ProfileRecord, 0, len(m.profiles))
-	for _, p := range m.profiles {
-		cp := p
-		cp.BodyJSON = append([]byte(nil), p.BodyJSON...)
-		out = append(out, cp)
-	}
-	return out, nil
-}
-
-func (m *Memory) DeleteProfile(_ context.Context, name string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.profiles[name]; !ok {
-		return ErrNotFound
-	}
-	delete(m.profiles, name)
-	return nil
 }

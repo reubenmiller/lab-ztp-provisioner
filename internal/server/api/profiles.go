@@ -1,22 +1,17 @@
 // Provisioning-profile admin endpoints.
 //
-// Profiles come from two sources:
-//
-//   - File-backed (loaded from --profiles-dir, optionally SOPS-encrypted).
-//     Read-only via this API; operators edit the YAML in git and SIGHUP
-//     the server (or hit /reload) to pick up changes.
-//   - DB-backed (created via this API). Editable.
+// All profiles are file-backed (loaded from --profiles-dir, optionally
+// SOPS-encrypted). Read-only via this API; operators edit the YAML files
+// directly (via the Config/Secrets API or git) and SIGHUP the server (or
+// hit /reload) to pick up changes.
 //
 // GET responses are passed through profiles.Redact() so secret values like
 // wifi passwords and c8y bootstrap tokens never leave the server in plain
-// text. To rotate a secret on a DB profile use POST /secrets which accepts a
-// patch document and merges it into the stored body before persisting.
+// text.
 package api
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"net/http"
 	"time"
 
@@ -44,9 +39,6 @@ func (s *Server) registerProfileRoutes(admin *http.ServeMux) {
 	admin.HandleFunc("GET /v1/admin/profiles", s.handleListProfiles)
 	admin.HandleFunc("GET /v1/admin/profiles/{name}", s.handleGetProfile)
 	admin.HandleFunc("GET /v1/admin/profiles/{name}/export", s.handleExportProfile)
-	admin.HandleFunc("POST /v1/admin/profiles", s.handleCreateProfile)
-	admin.HandleFunc("PUT /v1/admin/profiles/{name}", s.handleUpdateProfile)
-	admin.HandleFunc("DELETE /v1/admin/profiles/{name}", s.handleDeleteProfile)
 	admin.HandleFunc("POST /v1/admin/profiles/reload", s.handleReloadProfiles)
 	admin.HandleFunc("GET /v1/admin/profiles/encryption-key", s.handleEncryptionKey)
 }
@@ -163,78 +155,6 @@ func (s *Server) handleExportProfile(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// profileCreateRequest is the create/update payload. The Name in the URL
-// (PUT) wins over any name in the body.
-type profileCreateRequest struct {
-	Name        string             `json:"name,omitempty"`
-	Description string             `json:"description,omitempty"`
-	Labels      map[string]string  `json:"labels,omitempty"`
-	Priority    int                `json:"priority,omitempty"`
-	Selector    *profiles.Selector `json:"selector,omitempty"`
-	Payload     json.RawMessage    `json:"payload,omitempty"`
-}
-
-func (s *Server) handleCreateProfile(w http.ResponseWriter, r *http.Request) {
-	var req profileCreateRequest
-	if err := decodeJSON(r, &req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if err := profiles.ValidateName(req.Name); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if err := s.upsertDBProfile(r.Context(), req.Name, req, "create"); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusCreated)
-}
-
-func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	if err := profiles.ValidateName(name); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	// Refuse to overwrite a file-backed profile.
-	if existing, _ := s.Resolver.Get(r.Context(), name); existing != nil && existing.Source == profiles.SourceFile {
-		http.Error(w, "profile is file-backed; edit the YAML and reload", http.StatusForbidden)
-		return
-	}
-	var req profileCreateRequest
-	if err := decodeJSON(r, &req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if err := s.upsertDBProfile(r.Context(), name, req, "update"); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (s *Server) handleDeleteProfile(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	// Refuse to delete a file-backed profile.
-	if existing, _ := s.Resolver.Get(r.Context(), name); existing != nil && existing.Source == profiles.SourceFile {
-		http.Error(w, "profile is file-backed; delete the YAML and reload", http.StatusForbidden)
-		return
-	}
-	if err := s.Store.DeleteProfile(r.Context(), name); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	_ = s.Store.AppendAudit(r.Context(), store.AuditEntry{
-		Actor: "operator", Action: "profile.delete", Details: name,
-	})
-	w.WriteHeader(http.StatusNoContent)
-}
-
 func (s *Server) handleReloadProfiles(w http.ResponseWriter, r *http.Request) {
 	if s.ProfileLoader == nil {
 		http.Error(w, "no file profile loader configured", http.StatusNotImplemented)
@@ -249,55 +169,4 @@ func (s *Server) handleReloadProfiles(w http.ResponseWriter, r *http.Request) {
 		Actor: "operator", Action: "profile.reload",
 	})
 	writeJSON(w, http.StatusOK, map[string]int{"loaded": n})
-}
-
-func (s *Server) upsertDBProfile(ctx context.Context, name string, req profileCreateRequest, action string) error {
-	// Build the profile struct from the request, then re-marshal as the
-	// canonical body JSON the store keeps. This lets the resolver decode it
-	// later through the same path file-backed profiles take.
-	p := profiles.Profile{
-		Name:        name,
-		Description: req.Description,
-		Labels:      req.Labels,
-		Priority:    req.Priority,
-		Source:      profiles.SourceDB,
-		UpdatedAt:   time.Now().UTC(),
-		UpdatedBy:   "operator",
-	}
-	if req.Selector != nil {
-		p.Selector = req.Selector
-	}
-	// The Payload field is delivered as raw JSON so callers can hand-write
-	// any subset of providers without needing the server to know all the
-	// possible shapes. Validate by round-tripping through profiles.Profile.
-	if len(req.Payload) > 0 {
-		var dec struct {
-			Payload json.RawMessage `json:"payload"`
-		}
-		dec.Payload = req.Payload
-		raw, _ := json.Marshal(dec)
-		var probe profiles.Profile
-		if err := json.Unmarshal(raw, &probe); err != nil {
-			return err
-		}
-		p.Payload = probe.Payload
-	}
-	body, err := json.Marshal(p)
-	if err != nil {
-		return err
-	}
-	rec := store.ProfileRecord{
-		Name:        p.Name,
-		Description: p.Description,
-		BodyJSON:    body,
-		UpdatedAt:   p.UpdatedAt,
-		UpdatedBy:   p.UpdatedBy,
-	}
-	if err := s.Store.UpsertProfile(ctx, rec); err != nil {
-		return err
-	}
-	_ = s.Store.AppendAudit(ctx, store.AuditEntry{
-		Actor: "operator", Action: "profile." + action, Details: name,
-	})
-	return nil
 }

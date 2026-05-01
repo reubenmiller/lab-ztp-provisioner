@@ -8,24 +8,12 @@ import (
 	"github.com/thin-edge/tedge-zerotouch-provisioning/pkg/protocol"
 )
 
-type memStore struct{ m map[string]Profile }
-
-func (s *memStore) ListProfiles(_ context.Context) ([]Profile, error) {
-	out := make([]Profile, 0, len(s.m))
-	for _, p := range s.m {
-		out = append(out, p)
+func newRes(ps map[string]Profile, def string) *Resolver {
+	list := make([]Profile, 0, len(ps))
+	for _, p := range ps {
+		list = append(list, p)
 	}
-	return out, nil
-}
-func (s *memStore) GetProfile(_ context.Context, name string) (*Profile, error) {
-	if p, ok := s.m[name]; ok {
-		return &p, nil
-	}
-	return nil, nil
-}
-
-func newRes(profiles map[string]Profile, def string) *Resolver {
-	return NewResolver(nil, &memStore{m: profiles}, def, nil)
+	return NewResolver(NewStaticLoader(list), def, nil)
 }
 
 func TestResolver_Override_BeatsEverything(t *testing.T) {
@@ -183,7 +171,7 @@ func TestResolver_RequestedMissing_FallsThrough(t *testing.T) {
 }
 
 func TestResolver_BuildRegistry(t *testing.T) {
-	r := NewResolver(nil, nil, "", nil)
+	r := NewResolver(nil, "", nil)
 	reg := r.BuildRegistry(&Profile{Payload: &payload.Set{
 		WiFi: &payload.WiFi{Networks: []payload.WiFiConfig{{SSID: "n"}}},
 	}})

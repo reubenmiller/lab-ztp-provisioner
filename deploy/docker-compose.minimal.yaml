@@ -33,7 +33,7 @@ services:
     volumes:
       - ./data:/var/lib/ztp
       - ./config/ztp-server.yaml:/etc/ztp/ztp-server.yaml:ro
-      - ./profiles.d:/etc/ztp/profiles.d:ro
+      - ./profiles.d:/etc/ztp/profiles.d
     environment:
       - ZTP_LOG=debug
       # Required. `just up` writes a random token to deploy/.env on first

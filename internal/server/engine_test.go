@@ -84,26 +84,9 @@ func newTestResolver(reg payload.Registry) *profiles.Resolver {
 	prof := profiles.Profile{
 		Name:    profiles.DefaultName,
 		Payload: set,
-		Source:  profiles.SourceDB,
+		Source:  profiles.SourceFile,
 	}
-	return profiles.NewResolver(nil, &staticProfileStore{m: map[string]profiles.Profile{prof.Name: prof}}, profiles.DefaultName, nil)
-}
-
-type staticProfileStore struct{ m map[string]profiles.Profile }
-
-func (s *staticProfileStore) ListProfiles(_ context.Context) ([]profiles.Profile, error) {
-	out := make([]profiles.Profile, 0, len(s.m))
-	for _, p := range s.m {
-		out = append(out, p)
-	}
-	return out, nil
-}
-
-func (s *staticProfileStore) GetProfile(_ context.Context, name string) (*profiles.Profile, error) {
-	if p, ok := s.m[name]; ok {
-		return &p, nil
-	}
-	return nil, nil
+	return profiles.NewResolver(profiles.NewStaticLoader([]profiles.Profile{prof}), profiles.DefaultName, nil)
 }
 
 func TestEnroll_AllowlistAccepts(t *testing.T) {
