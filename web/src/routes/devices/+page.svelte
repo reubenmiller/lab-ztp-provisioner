@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { api, type Device, type ProfileSummary } from '$lib/api';
   import { confirmDialog } from '$lib/confirm.svelte';
 
@@ -86,7 +86,15 @@
     }
   }
 
-  onMount(load);
+  function onEnrolledEvent() { load(); }
+
+  onMount(() => {
+    load();
+    window.addEventListener('ztp:enrolled', onEnrolledEvent);
+  });
+  onDestroy(() => {
+    window.removeEventListener('ztp:enrolled', onEnrolledEvent);
+  });
 </script>
 
 <svelte:window onclick={closeMenuOnOutsideClick} />

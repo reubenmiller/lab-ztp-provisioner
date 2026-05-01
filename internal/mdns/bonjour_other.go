@@ -6,5 +6,5 @@ package mdns
 // on Linux, hashicorp/mdns answering direct multicast queries is sufficient.
 type bonjourProc struct{}
 
-func registerWithBonjour(_, _ string, _ int, _ []string) bonjourProc { return bonjourProc{} }
-func (b bonjourProc) stop()                                          {}
+func registerWithBonjour(_ string, _ int, _ string, _ []string) bonjourProc { return bonjourProc{} }
+func (b bonjourProc) stop()                                                 {}

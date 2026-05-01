@@ -40,7 +40,8 @@ type EngineConfig struct {
 	BundleTTL    time.Duration
 	ClockSkew    time.Duration
 	Logger       *slog.Logger
-	OnPending    func(p *store.PendingRequest) // optional notifier (WS push)
+	OnPending    func(p *store.PendingRequest) // optional notifier (SSE push)
+	OnEnrolled   func(d *store.Device)         // optional notifier fired on every successful enrollment
 }
 
 // Engine processes EnrollRequests. Safe for concurrent use; the underlying
@@ -280,6 +281,9 @@ func (e *Engine) issueBundle(ctx context.Context, req *protocol.EnrollRequest, r
 	dev.ProfileName = profileName
 	if err := e.cfg.Store.UpsertDevice(ctx, dev); err != nil {
 		return nil, err
+	}
+	if e.cfg.OnEnrolled != nil {
+		go e.cfg.OnEnrolled(dev)
 	}
 
 	mods, err := registry.Build(ctx, dev)

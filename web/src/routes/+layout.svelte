@@ -1,9 +1,11 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
-  import { getToken, setToken } from '$lib/api';
+  import { getToken, setToken, api, type PendingRequest, type Device } from '$lib/api';
   import { detect, type RuntimeInfo, type DesktopRuntimeInfo, wailsOpenConfigDirectory } from '$lib/runtime';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import Toasts from '$lib/components/Toasts.svelte';
+  import { addToast } from '$lib/toasts.svelte';
 
   let { children } = $props();
 
@@ -66,6 +68,7 @@
   let tokenInput     = $state('');
   let tokenError     = $state('');
   let runtimeInfo    = $state<RuntimeInfo | null>(null);
+  let sseStream: EventSource | null = null;
 
   const desktopRuntimeInfo = $derived(
     runtimeInfo?.mode === 'desktop' ? (runtimeInfo as DesktopRuntimeInfo) : null
@@ -92,12 +95,22 @@
       } else if (!getToken()) {
         needsLogin = true;
       }
+      // Start SSE only after we know the token. In browser mode a saved
+      // token is already in localStorage; in desktop mode setToken() above
+      // just populated it. Either way getToken() is now valid.
+      if (getToken()) startSSE();
     }).catch((err) => {
       console.warn('runtime detect failed', err);
       if (!getToken()) needsLogin = true;
+      // If we already have a token (browser mode with saved token) still start SSE.
+      if (getToken()) startSSE();
     });
     window.addEventListener('ztp:auth-required', handleAuthRequired);
-    return () => window.removeEventListener('ztp:auth-required', handleAuthRequired);
+
+    return () => {
+      window.removeEventListener('ztp:auth-required', handleAuthRequired);
+      sseStream?.close();
+    };
   });
 
   function toggleSidebar() {
@@ -113,6 +126,7 @@
     tokenInput = '';
     tokenError = '';
     needsLogin = false;
+    startSSE();
   }
 
   function changeToken() { needsLogin = true; }
@@ -126,6 +140,32 @@
   function isActive(href: string, exact?: boolean): boolean {
     if (exact) return $page.url.pathname === href;
     return $page.url.pathname.startsWith(href);
+  }
+
+  function startSSE() {
+    sseStream?.close();
+    sseStream = api.pendingStream(
+      (p: PendingRequest) => {
+        window.dispatchEvent(new CustomEvent('ztp:pending', { detail: p }));
+        addToast({
+          kind: 'pending',
+          title: 'Device needs approval',
+          body: p.device_id || p.fingerprint,
+          href: '/pending',
+          duration: 8000
+        });
+      },
+      (d: Device) => {
+        window.dispatchEvent(new CustomEvent('ztp:enrolled', { detail: d }));
+        addToast({
+          kind: 'enrolled',
+          title: 'Device enrolled',
+          body: d.id,
+          href: '/devices',
+          duration: 6000
+        });
+      }
+    );
   }
 </script>
 
@@ -235,6 +275,7 @@
 {/if}
 
 <ConfirmDialog />
+<Toasts />
 
 <style>
   /* ── Reset / globals ─────────────────────────────────────────────── */

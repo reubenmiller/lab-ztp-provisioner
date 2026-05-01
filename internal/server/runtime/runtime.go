@@ -136,6 +136,7 @@ func Start(ctx context.Context, opts Options) (*Handle, error) {
 		ClockSkew:    cfg.ClockSkew,
 		Logger:       logger,
 		OnPending:    hub.Notify,
+		OnEnrolled:   hub.NotifyEnrolled,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: %w", err)

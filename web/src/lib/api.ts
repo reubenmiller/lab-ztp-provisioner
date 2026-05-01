@@ -142,18 +142,24 @@ export const api = {
     });
   },
 
-  // Server-Sent Events stream of newly pending requests.
-  pendingStream(onEvent: (p: PendingRequest) => void): EventSource {
+  // Server-Sent Events stream of enrollment events (pending + enrolled).
+  // The same SSE connection carries two named event types:
+  //   "pending"  — a device.PendingRequest arrived for manual approval
+  //   "enrolled" — a device.Device that auto-enrolled successfully
+  pendingStream(onPending: (p: PendingRequest) => void, onEnrolled?: (d: Device) => void): EventSource {
     const url = new URL('/v1/admin/pending/stream', window.location.origin);
     const token = getToken();
     if (token) url.searchParams.set('token', token); // SSE can't set custom headers
     const es = new EventSource(url.toString());
-    const handler = (m: MessageEvent) => {
-      try {
-        onEvent(JSON.parse(m.data));
-      } catch {}
+    const pendingHandler = (m: MessageEvent) => {
+      try { onPending(JSON.parse(m.data)); } catch {}
     };
-    es.addEventListener('pending', handler as EventListener);
+    const enrolledHandler = (m: MessageEvent) => {
+      if (!onEnrolled) return;
+      try { onEnrolled(JSON.parse(m.data)); } catch {}
+    };
+    es.addEventListener('pending', pendingHandler as EventListener);
+    es.addEventListener('enrolled', enrolledHandler as EventListener);
     return es;
   }
 };

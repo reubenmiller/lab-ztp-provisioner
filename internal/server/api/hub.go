@@ -8,12 +8,22 @@ import (
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server/store"
 )
 
-// Hub fans out PendingRequest events to connected operators. Implemented as
+// sseEvent is a typed Server-Sent Event that can carry any JSON payload.
+type sseEvent struct {
+	name string
+	data []byte
+}
+
+// Hub fans out enrollment events to connected operators. Implemented as
 // Server-Sent Events to keep the dependency footprint small (no WS lib) and
 // to play nicely with HTTP/2 + ALBs in cloud deployments.
+//
+// Two event types are broadcast over the same stream:
+//   - "pending"  — a device queued for manual approval (store.PendingRequest)
+//   - "enrolled" — a device that auto-enrolled (store.Device)
 type Hub struct {
 	mu      sync.Mutex
-	clients map[chan *store.PendingRequest]struct{}
+	clients map[chan sseEvent]struct{}
 	// done is closed by Shutdown. Open SSE streams select on it and
 	// return immediately, so http.Server.Shutdown doesn't block waiting
 	// for the long-lived /v1/admin/pending/stream connections to drain.
@@ -22,7 +32,7 @@ type Hub struct {
 
 func NewHub() *Hub {
 	return &Hub{
-		clients: map[chan *store.PendingRequest]struct{}{},
+		clients: map[chan sseEvent]struct{}{},
 		done:    make(chan struct{}),
 	}
 }
@@ -42,17 +52,34 @@ func (h *Hub) Shutdown() {
 	}
 }
 
-// Notify is the function passed to EngineConfig.OnPending.
-func (h *Hub) Notify(p *store.PendingRequest) {
+func (h *Hub) broadcast(ev sseEvent) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for ch := range h.clients {
 		select {
-		case ch <- p:
+		case ch <- ev:
 		default:
 			// Drop on slow consumers; they'll get the next event.
 		}
 	}
+}
+
+// Notify is the function passed to EngineConfig.OnPending.
+func (h *Hub) Notify(p *store.PendingRequest) {
+	b, err := json.Marshal(p)
+	if err != nil {
+		return
+	}
+	h.broadcast(sseEvent{name: "pending", data: b})
+}
+
+// NotifyEnrolled is the function passed to EngineConfig.OnEnrolled.
+func (h *Hub) NotifyEnrolled(d *store.Device) {
+	b, err := json.Marshal(d)
+	if err != nil {
+		return
+	}
+	h.broadcast(sseEvent{name: "enrolled", data: b})
 }
 
 // ServeWS implements GET /v1/admin/pending/stream as an SSE stream despite
@@ -68,7 +95,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	ch := make(chan *store.PendingRequest, 8)
+	ch := make(chan sseEvent, 8)
 	h.mu.Lock()
 	h.clients[ch] = struct{}{}
 	h.mu.Unlock()
@@ -90,13 +117,9 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 			// Engine is shutting down — bail out so http.Server.Shutdown
 			// doesn't block its connection drain on this stream.
 			return
-		case p := <-ch:
-			b, err := json.Marshal(p)
-			if err != nil {
-				continue
-			}
-			_, _ = w.Write([]byte("event: pending\ndata: "))
-			_, _ = w.Write(b)
+		case ev := <-ch:
+			_, _ = w.Write([]byte("event: " + ev.name + "\ndata: "))
+			_, _ = w.Write(ev.data)
 			_, _ = w.Write([]byte("\n\n"))
 			flusher.Flush()
 		}

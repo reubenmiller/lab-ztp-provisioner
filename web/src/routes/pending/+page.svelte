@@ -7,7 +7,6 @@
   let profiles = $state<ProfileSummary[]>([]);
   let selected = $state<Record<string, string>>({});
   let err = $state<string | null>(null);
-  let stream: EventSource | undefined;
 
   async function load() {
     try {
@@ -37,12 +36,16 @@
     await load();
   }
 
+  function onPendingEvent() { load(); }
+
   onMount(() => {
     load();
     loadProfiles();
-    stream = api.pendingStream(() => load());
+    window.addEventListener('ztp:pending', onPendingEvent);
   });
-  onDestroy(() => stream?.close());
+  onDestroy(() => {
+    window.removeEventListener('ztp:pending', onPendingEvent);
+  });
 </script>
 
 <h2>Pending approvals <small>{items.length}</small></h2>
