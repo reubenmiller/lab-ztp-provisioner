@@ -438,9 +438,9 @@ func buildHTTPCandidates(
 
 	// mDNS discovery: prepend if live, capture pubkey hint from TXT.
 	if useMDNS {
-		mctx, mcancel := context.WithTimeout(context.Background(), 5*time.Second)
+		mctx, mcancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer mcancel()
-		if entry, err := mdns.Discover(mctx, mdnsService, 4*time.Second); err == nil {
+		if entry, err := mdns.Discover(mctx, mdnsService, 8*time.Second); err == nil {
 			discoveredURL := entry.URL()
 			if ok, discoveredDial := probeWithMDNS(discoveredURL, logger); ok {
 				hint := ""
@@ -600,11 +600,22 @@ func scanAndEnroll(
 	logger.Info("scan-and-enroll: starting periodic HTTP rescan", "interval", interval)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	// Fire immediately on entry (Phase 1 already consumed time waiting for a
+	// server that wasn't there; don't add another full interval before the
+	// first background scan).
+	first := true
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
+		if first {
+			first = false
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+		} else {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-ticker.C:
+			}
 		}
 		// Per-tick local copy: buildHTTPCandidates may set the pubkey hint
 		// from a freshly-discovered mDNS TXT record, but we don't want one

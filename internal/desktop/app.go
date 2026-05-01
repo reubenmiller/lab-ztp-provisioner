@@ -102,6 +102,7 @@ type RuntimeInfo struct {
 	FirstRun          bool     `json:"firstRun,omitempty"`
 	BootstrappedFiles []string `json:"bootstrappedFiles,omitempty"`
 	Capabilities      []string `json:"capabilities"`
+	MDNS              bool     `json:"mdns"`
 }
 
 const defaultSealRegex = `^(password|bootstrap_token|static_token|.*secret.*)$`
@@ -344,5 +345,6 @@ func (a *App) GetRuntimeInfo() RuntimeInfo {
 		out.DefaultSealRegex = defaultSealRegex
 	}
 	out.Capabilities = caps
+	out.MDNS = a.handle.MDNSActive
 	return out
 }

@@ -45,6 +45,11 @@ type Handle struct {
 	// port even when ListenOverride was ":0").
 	BaseURL string
 
+	// MDNSActive is true when a live _ztp._tcp mDNS publisher was
+	// started successfully. Mirrors api.Server.MDNSActive so callers
+	// such as the desktop binding can read it without going through HTTP.
+	MDNSActive bool
+
 	logger     *slog.Logger
 	server     *http.Server
 	publisher  *mdns.Publisher

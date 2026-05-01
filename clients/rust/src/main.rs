@@ -654,7 +654,7 @@ fn build_http_candidates(
     if use_mdns {
         #[cfg(feature = "mdns")]
         {
-            match mdns::discover(_mdns_service, Duration::from_secs(5)) {
+            match mdns::discover(_mdns_service, Duration::from_secs(8)) {
                 Ok(entry) => {
                     let discovered_url = entry.url().to_string();
                     if let Some(dial_str) = transport::probe_with_mdns(&discovered_url) {
@@ -869,7 +869,9 @@ fn scan_and_enroll(
     log::info!("scan-and-enroll: starting periodic HTTP rescan interval={interval:?}");
     // Sleep in small increments so cancel is observed promptly.
     let tick = std::cmp::min(interval, Duration::from_millis(500));
-    let mut elapsed = Duration::ZERO;
+    // Fire immediately on entry: Phase 1 already consumed time; don't add
+    // another full interval before the first background scan.
+    let mut elapsed = interval;
     loop {
         // Wait for `interval`, polling cancel every `tick`.
         while elapsed < interval {

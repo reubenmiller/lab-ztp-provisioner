@@ -193,6 +193,8 @@ func Start(ctx context.Context, opts Options) (*Handle, error) {
 	baseURL := scheme + "://" + listener.Addr().String()
 
 	publisher := startMDNS(cfg, pubB64, listener.Addr(), logger)
+	mdnsActive := publisher != nil
+	apiSrv.MDNSActive = mdnsActive
 
 	tlsOpts := tlsmode.Options{
 		CertFile:  cfg.TLS.Cert,
@@ -213,6 +215,7 @@ func Start(ctx context.Context, opts Options) (*Handle, error) {
 		AgeIdentity:   ageIdentity,
 		AdminToken:    adminToken,
 		BaseURL:       baseURL,
+		MDNSActive:    mdnsActive,
 		logger:        logger,
 		server:        srv,
 		publisher:     publisher,

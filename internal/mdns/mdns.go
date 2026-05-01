@@ -19,8 +19,14 @@ import (
 )
 
 // Publisher advertises the server on the LAN.
+//
+// On macOS a dns-sd subprocess is also spawned so that the registration is
+// visible to mDNSResponder (and therefore to dns-sd -B, Finder, iOS, etc.).
+// hashicorp/mdns alone only answers direct multicast queries from other Go
+// agents; it does not touch the system daemon.
 type Publisher struct {
-	srv *hmdns.Server
+	srv     *hmdns.Server
+	bonjour bonjourProc // platform-specific mDNSResponder registration
 }
 
 // Publish starts a goroutine-backed advertiser. service should be like
@@ -44,12 +50,20 @@ func Publish(service string, port int, host string, info []string) (*Publisher, 
 	if err != nil {
 		return nil, fmt.Errorf("mdns server: %w", err)
 	}
-	return &Publisher{srv: srv}, nil
+	p := &Publisher{srv: srv}
+	// On macOS, also register with mDNSResponder so the service shows up in
+	// dns-sd -B and is visible to the system resolver.
+	p.bonjour = registerWithBonjour(service, port, host, info)
+	return p, nil
 }
 
 // Close stops advertising.
 func (p *Publisher) Close() error {
-	if p == nil || p.srv == nil {
+	if p == nil {
+		return nil
+	}
+	p.bonjour.stop()
+	if p.srv == nil {
 		return nil
 	}
 	return p.srv.Shutdown()
@@ -107,7 +121,7 @@ func (e Entry) TLSServerName() string {
 // answering entry, or an error if the timeout elapses.
 func Discover(ctx context.Context, service string, timeout time.Duration) (*Entry, error) {
 	if timeout <= 0 {
-		timeout = 4 * time.Second
+		timeout = 8 * time.Second
 	}
 	ch := make(chan *hmdns.ServiceEntry, 4)
 	params := hmdns.DefaultParams(service)

@@ -178,8 +178,18 @@
         {/each}
       </nav>
 
-      <!-- Footer: token action + collapse toggle -->
+      <!-- Footer: mDNS indicator + token action + collapse toggle -->
       <div class="sidebar-footer">
+        {#if runtimeInfo}
+          <div
+            class="mdns-indicator"
+            class:mdns-on={runtimeInfo.mdns}
+            title={runtimeInfo.mdns ? 'mDNS active — _ztp._tcp is being advertised on the LAN' : 'mDNS inactive — devices cannot auto-discover this server'}
+          >
+            <span class="mdns-led" aria-hidden="true"></span>
+            <span class="nav-label mdns-label">mDNS {runtimeInfo.mdns ? 'active' : 'inactive'}</span>
+          </div>
+        {/if}
         <button
           class="sidebar-btn"
           onclick={changeToken}
@@ -355,6 +365,32 @@
     transition: background 0.1s, color 0.1s;
   }
   .sidebar-btn:hover { background: #21262d; color: #e6edf3; }
+
+  /* mDNS status indicator */
+  .mdns-indicator {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.45rem 0.55rem;
+    font-size: 0.875rem;
+    color: #6e7681;
+    white-space: nowrap;
+  }
+  .mdns-indicator.mdns-on { color: #8b949e; }
+  .mdns-led {
+    flex-shrink: 0;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #3d4450;
+    box-shadow: none;
+    transition: background 0.3s, box-shadow 0.3s;
+  }
+  .mdns-on .mdns-led {
+    background: #2ea043;
+    box-shadow: 0 0 5px #2ea043aa;
+  }
+  .mdns-label { font-size: 0.875rem; }
 
   /* Hide labels when sidebar is collapsed */
   .sidebar.collapsed .nav-label    { display: none; }

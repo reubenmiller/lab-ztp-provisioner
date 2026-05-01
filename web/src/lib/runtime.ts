@@ -21,6 +21,7 @@ export type RuntimeMode = 'browser' | 'desktop';
 export interface RuntimeInfo {
   mode: RuntimeMode;
   capabilities: string[];
+  mdns?: boolean;
 }
 
 export interface DesktopRuntimeInfo extends RuntimeInfo {
@@ -37,6 +38,7 @@ export interface DesktopRuntimeInfo extends RuntimeInfo {
   profilesDir?: string;
   firstRun?: boolean;
   bootstrappedFiles?: string[];
+  mdns?: boolean;
 }
 
 export interface C8YCredential {
@@ -153,7 +155,7 @@ export async function detect(): Promise<RuntimeInfo> {
     return cached;
   }
   const data = (await res.json()) as RuntimeInfo;
-  cached = { mode: data.mode ?? 'browser', capabilities: data.capabilities ?? [] };
+  cached = { mode: data.mode ?? 'browser', capabilities: data.capabilities ?? [], mdns: data.mdns ?? false };
   return cached;
 }
 

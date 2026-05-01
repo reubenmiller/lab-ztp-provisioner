@@ -65,6 +65,11 @@ type Server struct {
 	// Empty Mode is treated as "browser" by the handler.
 	RuntimeMode         string
 	RuntimeCapabilities []string
+
+	// MDNSActive is true when a live _ztp._tcp mDNS publisher was started
+	// successfully. Surfaced via GET /v1/runtime-config so the SPA can
+	// show a status indicator.
+	MDNSActive bool
 }
 
 // Routes returns an http.Handler with all routes registered.

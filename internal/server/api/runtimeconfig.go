@@ -17,6 +17,7 @@ import (
 type RuntimeConfig struct {
 	Mode         string   `json:"mode"`
 	Capabilities []string `json:"capabilities,omitempty"`
+	MDNS         bool     `json:"mdns"`
 }
 
 // handleRuntimeConfig is intentionally unauthenticated. Mode and
@@ -34,5 +35,5 @@ func (s *Server) handleRuntimeConfig(w http.ResponseWriter, _ *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(w).Encode(RuntimeConfig{Mode: mode, Capabilities: caps})
+	_ = json.NewEncoder(w).Encode(RuntimeConfig{Mode: mode, Capabilities: caps, MDNS: s.MDNSActive})
 }

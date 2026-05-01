@@ -59,6 +59,7 @@ export namespace desktop {
 	    firstRun?: boolean;
 	    bootstrappedFiles?: string[];
 	    capabilities: string[];
+	    mdns: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new RuntimeInfo(source);
@@ -80,6 +81,7 @@ export namespace desktop {
 	        this.firstRun = source["firstRun"];
 	        this.bootstrappedFiles = source["bootstrappedFiles"];
 	        this.capabilities = source["capabilities"];
+	        this.mdns = source["mdns"];
 	    }
 	}
 
