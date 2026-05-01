@@ -204,8 +204,9 @@
   th, td { padding: 0.5rem; text-align: left; border-bottom: 1px solid #30363d; vertical-align: top; }
   th { color: #8b949e; font-weight: normal; }
   code { background: #161b22; padding: 0.1rem 0.3rem; border-radius: 3px; }
-  .mac-cell { display: flex; flex-direction: column; gap: 0.15rem; padding-top: 0.55rem; }
-  .mac { font-size: 0.8rem; }
+  .mac-cell { }
+  .mac { display: block; margin-bottom: 0.15rem; background: none; padding: 0; }
+  .mac:last-child { margin-bottom: 0; }
   .os-name { font-size: 0.9rem; }
 
   /* Actions / kebab menu */
