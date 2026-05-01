@@ -184,6 +184,17 @@ func (a *App) WriteProfileFile(name, content string) error {
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
+func (a *App) DeleteProfileFile(name string) error {
+	path, err := a.profilePath(name)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 func (a *App) RevealSealedProfile(content string) (string, error) {
 	if !sopsage.IsEncrypted([]byte(content)) {
 		return "", errors.New("content does not appear to be SOPS encrypted")

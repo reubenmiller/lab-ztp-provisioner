@@ -66,6 +66,10 @@ export function SetContext(arg1) {
   return window['go']['desktop']['App']['SetContext'](arg1);
 }
 
+export function DeleteProfileFile(arg1) {
+  return window['go']['desktop']['App']['DeleteProfileFile'](arg1);
+}
+
 export function WriteProfileFile(arg1, arg2) {
   return window['go']['desktop']['App']['WriteProfileFile'](arg1, arg2);
 }

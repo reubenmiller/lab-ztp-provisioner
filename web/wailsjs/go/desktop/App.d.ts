@@ -36,4 +36,6 @@ export function SetC8YCredential(arg1:string,arg2:string,arg3:string,arg4:string
 
 export function SetContext(arg1:context.Context):Promise<void>;
 
+export function DeleteProfileFile(arg1:string):Promise<void>;
+
 export function WriteProfileFile(arg1:string,arg2:string):Promise<void>;

@@ -8,11 +8,12 @@
 //
 // Endpoints:
 //
-//	GET  /v1/admin/config/files          — list .yaml/.yml filenames
-//	GET  /v1/admin/config/files/{name}   — read raw file content
-//	PUT  /v1/admin/config/files/{name}   — write file (creates if absent)
-//	POST /v1/admin/config/seal           — seal YAML content, return ciphertext
-//	POST /v1/admin/config/reveal         — decrypt SOPS-age content, return plaintext
+//	GET    /v1/admin/config/files          — list .yaml/.yml filenames
+//	GET    /v1/admin/config/files/{name}   — read raw file content
+//	PUT    /v1/admin/config/files/{name}   — write file (creates if absent)
+//	DELETE /v1/admin/config/files/{name}   — delete a profile file
+//	POST   /v1/admin/config/seal           — seal YAML content, return ciphertext
+//	POST   /v1/admin/config/reveal         — decrypt SOPS-age content, return plaintext
 package api
 
 import (
@@ -36,6 +37,7 @@ func (s *Server) registerConfigFileRoutes(admin *http.ServeMux) {
 	admin.HandleFunc("GET /v1/admin/config/files", s.handleListConfigFiles)
 	admin.HandleFunc("GET /v1/admin/config/files/{name}", s.handleGetConfigFile)
 	admin.HandleFunc("PUT /v1/admin/config/files/{name}", s.handlePutConfigFile)
+	admin.HandleFunc("DELETE /v1/admin/config/files/{name}", s.handleDeleteConfigFile)
 	admin.HandleFunc("POST /v1/admin/config/seal", s.handleSealConfig)
 	admin.HandleFunc("POST /v1/admin/config/reveal", s.handleRevealConfig)
 }
@@ -129,6 +131,30 @@ func (s *Server) handlePutConfigFile(w http.ResponseWriter, r *http.Request) {
 		Actor: "operator", Action: "config.write", Details: name,
 	})
 	// Trigger an in-process reload so the new file is picked up immediately.
+	if s.ProfileLoader != nil {
+		_, _ = s.ProfileLoader.Load(r.Context())
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleDeleteConfigFile(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	path, err := s.configFilePath(name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	_ = s.Store.AppendAudit(r.Context(), store.AuditEntry{
+		Actor: "operator", Action: "config.delete", Details: name,
+	})
 	if s.ProfileLoader != nil {
 		_, _ = s.ProfileLoader.Load(r.Context())
 	}

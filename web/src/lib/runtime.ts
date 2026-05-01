@@ -76,6 +76,7 @@ type DesktopBindings = {
   ListProfileFiles?: () => Promise<string[]>;
   ReadProfileFile?: (name: string) => Promise<string>;
   WriteProfileFile?: (name: string, content: string) => Promise<void>;
+  DeleteProfileFile?: (name: string) => Promise<void>;
   RevealSealedProfile?: (content: string) => Promise<string>;
   SealProfile?: (content: string, encryptedRegex: string) => Promise<string>;
   SealProfileForSave?: (content: string) => Promise<string>;
@@ -103,6 +104,10 @@ export function wailsReadProfileFile(): ((name: string) => Promise<string>) | nu
 
 export function wailsWriteProfileFile(): ((name: string, content: string) => Promise<void>) | null {
   return desktopBindings()?.WriteProfileFile ?? null;
+}
+
+export function wailsDeleteProfileFile(): ((name: string) => Promise<void>) | null {
+  return desktopBindings()?.DeleteProfileFile ?? null;
 }
 
 export function wailsRevealSealedProfile(): ((content: string) => Promise<string>) | null {

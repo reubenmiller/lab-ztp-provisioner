@@ -107,6 +107,16 @@ export const api = {
       if (!res.ok) { const t = await res.text(); throw new Error(t); }
     });
   },
+  configFileDelete: (name: string) => {
+    const token = getToken();
+    return fetch(`/v1/admin/config/files/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) }
+    }).then(async (res) => {
+      if (res.status === 401) { clearToken(); window.dispatchEvent(new CustomEvent('ztp:auth-required')); throw new AuthError('401'); }
+      if (!res.ok) { const t = await res.text(); throw new Error(t); }
+    });
+  },
   configSeal: (content: string) => {
     const token = getToken();
     return fetch('/v1/admin/config/seal', {
