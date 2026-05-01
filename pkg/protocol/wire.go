@@ -46,7 +46,10 @@ type DeviceFacts struct {
 	Hostname     string   `json:"hostname,omitempty"`
 	OS           string   `json:"os,omitempty"`
 	Arch         string   `json:"arch,omitempty"`
-	AgentVersion string   `json:"agent_version,omitempty"`
+	// OSPrettyName is the human-readable OS name from /etc/os-release
+	// (PRETTY_NAME field), e.g. "Debian GNU/Linux 12 (bookworm)".
+	OSPrettyName string `json:"os_pretty_name,omitempty"`
+	AgentVersion string `json:"agent_version,omitempty"`
 }
 
 // SignedEnvelope wraps a JSON document with a detached signature.

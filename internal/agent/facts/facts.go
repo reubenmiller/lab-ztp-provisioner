@@ -46,5 +46,25 @@ func Collect(agentVersion string) protocol.DeviceFacts {
 			}
 		}
 	}
+	f.OSPrettyName = osReleasePrettyName()
 	return f
+}
+
+// osReleasePrettyName parses /etc/os-release to extract the PRETTY_NAME value.
+// Returns empty string on any error (file absent, field missing, non-Linux).
+func osReleasePrettyName() string {
+	data, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.HasPrefix(line, "PRETTY_NAME=") {
+			continue
+		}
+		val := strings.TrimPrefix(line, "PRETTY_NAME=")
+		// Strip surrounding double-quotes if present.
+		val = strings.Trim(strings.TrimSpace(val), `"`)
+		return val
+	}
+	return ""
 }

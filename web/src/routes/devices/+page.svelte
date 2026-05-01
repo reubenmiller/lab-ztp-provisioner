@@ -37,13 +37,31 @@
 {#if err}<p class="err">{err}</p>{/if}
 
 <table>
-  <thead><tr><th>Device ID</th><th>Model</th><th>Hostname</th><th>Enrolled</th><th>Last seen</th><th></th></tr></thead>
+  <thead><tr><th>Device ID</th><th>OS</th><th>Model</th><th>Hostname</th><th>MAC address(es)</th><th>Enrolled</th><th>Last seen</th><th></th></tr></thead>
   <tbody>
     {#each items as d (d.id)}
       <tr>
         <td><code>{d.id}</code></td>
+        <td class="os-cell">
+          {#if d.facts?.os_pretty_name}
+            <span class="os-name">{d.facts.os_pretty_name}</span>
+          {:else if d.facts?.os}
+            <span class="os-name">{d.facts.os}{d.facts?.arch ? ` / ${d.facts.arch}` : ''}</span>
+          {:else}
+            —
+          {/if}
+        </td>
         <td>{d.facts?.model ?? '—'}</td>
         <td>{d.facts?.hostname ?? '—'}</td>
+        <td class="mac-cell">
+          {#if d.facts?.mac_addresses?.length}
+            {#each d.facts.mac_addresses as mac}
+              <code class="mac">{mac}</code>
+            {/each}
+          {:else}
+            —
+          {/if}
+        </td>
         <td>{new Date(d.enrolled_at).toLocaleString()}</td>
         <td>{new Date(d.last_seen).toLocaleString()}</td>
         <td>
@@ -60,9 +78,12 @@
   h2 small { color: #8b949e; font-weight: normal; margin-left: 0.5rem; }
   .err { color: #f85149; }
   table { width: 100%; border-collapse: collapse; }
-  th, td { padding: 0.5rem; text-align: left; border-bottom: 1px solid #30363d; }
+  th, td { padding: 0.5rem; text-align: left; border-bottom: 1px solid #30363d; vertical-align: top; }
   th { color: #8b949e; font-weight: normal; }
   code { background: #161b22; padding: 0.1rem 0.3rem; border-radius: 3px; }
+  .mac-cell { display: flex; flex-direction: column; gap: 0.15rem; padding-top: 0.55rem; }
+  .mac { font-size: 0.8rem; }
+  .os-name { font-size: 0.9rem; }
   button.bad { background: #da3633; color: white; border: 1px solid #30363d; border-radius: 4px; padding: 0.2rem 0.6rem; cursor: pointer; }
   button.bad:disabled { opacity: 0.5; cursor: default; }
 </style>

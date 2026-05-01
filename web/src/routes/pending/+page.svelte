@@ -66,7 +66,7 @@
   <table>
     <thead>
       <tr>
-        <th>Device ID</th><th>Fingerprint</th><th>Model</th><th>MAC</th><th>Reason</th><th>First seen</th><th>Profile</th><th></th>
+        <th>Device ID</th><th>Fingerprint</th><th>OS</th><th>Model</th><th>MAC</th><th>Reason</th><th>First seen</th><th>Profile</th><th></th>
       </tr>
     </thead>
     <tbody>
@@ -74,6 +74,15 @@
         <tr>
           <td><code>{p.device_id}</code></td>
           <td><code>{p.fingerprint}</code></td>
+          <td>
+            {#if p.facts?.os_pretty_name}
+              {p.facts.os_pretty_name}
+            {:else if p.facts?.os}
+              {p.facts.os}{p.facts?.arch ? ` / ${p.facts.arch}` : ''}
+            {:else}
+              —
+            {/if}
+          </td>
           <td>{p.facts?.model ?? '—'}</td>
           <td>{(p.facts?.mac_addresses ?? []).join(', ') || '—'}</td>
           <td>{p.reason}</td>

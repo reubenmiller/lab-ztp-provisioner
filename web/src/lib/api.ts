@@ -148,12 +148,22 @@ export const api = {
   }
 };
 
+export interface DeviceFacts {
+  mac_addresses?: string[];
+  serial?: string;
+  model?: string;
+  hostname?: string;
+  os?: string;
+  arch?: string;
+  os_pretty_name?: string;
+}
+
 export interface PendingRequest {
   id: string;
   device_id: string;
   public_key: string;
   fingerprint: string;
-  facts: { mac_addresses?: string[]; serial?: string; model?: string; hostname?: string };
+  facts: DeviceFacts;
   first_seen: string;
   last_seen: string;
   reason: string;
