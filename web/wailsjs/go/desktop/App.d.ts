@@ -12,6 +12,8 @@ export function Context():Promise<context.Context>;
 
 export function DeleteC8YCredential(arg1:string):Promise<void>;
 
+export function DeleteProfileFile(arg1:string):Promise<void>;
+
 export function GetRuntimeInfo():Promise<desktop.RuntimeInfo>;
 
 export function ListC8YCredentials():Promise<Array<desktop.C8YCredential>>;
@@ -35,7 +37,5 @@ export function SealProfileForSave(arg1:string):Promise<string>;
 export function SetC8YCredential(arg1:string,arg2:string,arg3:string,arg4:string):Promise<void>;
 
 export function SetContext(arg1:context.Context):Promise<void>;
-
-export function DeleteProfileFile(arg1:string):Promise<void>;
 
 export function WriteProfileFile(arg1:string,arg2:string):Promise<void>;

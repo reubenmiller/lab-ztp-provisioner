@@ -18,6 +18,10 @@ export function DeleteC8YCredential(arg1) {
   return window['go']['desktop']['App']['DeleteC8YCredential'](arg1);
 }
 
+export function DeleteProfileFile(arg1) {
+  return window['go']['desktop']['App']['DeleteProfileFile'](arg1);
+}
+
 export function GetRuntimeInfo() {
   return window['go']['desktop']['App']['GetRuntimeInfo']();
 }
@@ -64,10 +68,6 @@ export function SetC8YCredential(arg1, arg2, arg3, arg4) {
 
 export function SetContext(arg1) {
   return window['go']['desktop']['App']['SetContext'](arg1);
-}
-
-export function DeleteProfileFile(arg1) {
-  return window['go']['desktop']['App']['DeleteProfileFile'](arg1);
 }
 
 export function WriteProfileFile(arg1, arg2) {
