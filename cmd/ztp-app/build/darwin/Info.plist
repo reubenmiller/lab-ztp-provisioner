@@ -31,5 +31,18 @@
     -->
     <key>NSBluetoothAlwaysUsageDescription</key>
     <string>ZTP uses Bluetooth to onboard nearby devices that advertise the ZTP service. Without this permission, BLE-capable devices cannot be enrolled from this Mac.</string>
+    <!--
+        Required on macOS 10.15+ for local-network access (mDNS multicast).
+        Without NSLocalNetworkUsageDescription the OS silently suppresses the
+        permission prompt and _ztp._tcp advertisements are never sent.
+        NSBonjourServices is required alongside it to scope the prompt to the
+        exact service type being advertised/browsed.
+    -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>ZTP advertises itself on the local network via mDNS (_ztp._tcp) so that devices can discover the provisioning server without manual configuration.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_ztp._tcp</string>
+    </array>
 </dict>
 </plist>
