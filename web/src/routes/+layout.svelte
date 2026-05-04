@@ -57,6 +57,8 @@
     lock: `<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4" stroke-linecap="round"/>`,
     'chevron-left': `<polyline points="15 18 9 12 15 6"/>`,
     'chevron-right': `<polyline points="9 18 15 12 9 6"/>`,
+      online: `<circle cx="12" cy="12" r="7" fill="#00bb00" stroke="none" />`,
+      offline: `<circle cx="12" cy="12" r="7" fill="#9ca3af" stroke="none" />`,
   };
 
   function icon(name: string): string {
@@ -221,15 +223,21 @@
       <!-- Footer: mDNS indicator + token action + collapse toggle -->
       <div class="sidebar-footer">
         {#if runtimeInfo}
-          <div
-            class="mdns-indicator"
+          <button
+            class="sidebar-btn"
             class:mdns-on={runtimeInfo.mdns}
-            title={runtimeInfo.mdns ? 'mDNS active — _ztp._tcp is being advertised on the LAN' : 'mDNS inactive — devices cannot auto-discover this server'}
+            type="button"
+            aria-pressed={runtimeInfo.mdns}
+            title={runtimeInfo.mdns ? 'Disable mDNS (currently active — _ztp._tcp is being advertised on the LAN)' : 'Enable mDNS (currently inactive — devices cannot auto-discover this server)'}
+              tabindex="-1"
+              style="pointer-events: none; user-select: none; cursor: default;"
+              disabled
           >
-            <span class="mdns-led" aria-hidden="true"></span>
+            {@html icon(runtimeInfo.mdns ? 'online' : 'offline')}
             <span class="nav-label mdns-label">mDNS {runtimeInfo.mdns ? 'active' : 'inactive'}</span>
-          </div>
+          </button>
         {/if}
+        {#if runtimeInfo?.mode !== 'desktop'}
         <button
           class="sidebar-btn"
           onclick={changeToken}
@@ -238,6 +246,7 @@
           {@html icon('lock')}
           <span class="nav-label">Change token</span>
         </button>
+        {/if}
         <button
           class="sidebar-btn toggle-btn"
           onclick={toggleSidebar}
@@ -410,12 +419,24 @@
   /* mDNS status indicator */
   .mdns-indicator {
     display: flex;
-    align-items: center;
+    align-items: baseline;
     gap: 0.6rem;
     padding: 0.45rem 0.55rem;
     font-size: 0.875rem;
     color: #6e7681;
     white-space: nowrap;
+  }
+  .mdns-indicator svg {
+    flex-shrink: 0;
+    width: 1.25em;
+    height: 1.25em;
+    vertical-align: middle;
+    margin-top: -1px;
+    margin-bottom: -1px;
+  }
+  .mdns-label {
+    display: block;
+    line-height: 1.2;
   }
   .mdns-indicator.mdns-on { color: #8b949e; }
   .mdns-led {
@@ -437,6 +458,12 @@
   .sidebar.collapsed .nav-label    { display: none; }
   .sidebar.collapsed .group-label  { display: none; }
   .sidebar.collapsed .brand-name   { display: none; }
+  .sidebar.collapsed .mdns-label   { display: none; }
+  .sidebar.collapsed .mdns-indicator {
+    justify-content: center;
+    padding-left: 0;
+    padding-right: 0;
+  }
 
   /* ── Page body ──────────────────────────────────────────────────── */
   .page-body {
