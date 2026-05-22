@@ -70,6 +70,13 @@ type Server struct {
 	// successfully. Surfaced via GET /v1/runtime-config so the SPA can
 	// show a status indicator.
 	MDNSActive bool
+
+	// OnApproved, when non-nil, is called after handleApprovePending
+	// successfully promotes a pending device to the device store.  The
+	// callback receives the device ID so an active Zenoh component can
+	// publish an approval notification back to the waiting agent.
+	// Invoked in a separate goroutine; must be safe for concurrent use.
+	OnApproved func(ctx context.Context, deviceID string)
 }
 
 // Routes returns an http.Handler with all routes registered.
@@ -371,6 +378,11 @@ func (s *Server) handleApprovePending(w http.ResponseWriter, r *http.Request) {
 	_ = s.Store.AppendAudit(r.Context(), store.AuditEntry{
 		Actor: "operator", Action: "approve", DeviceID: p.DeviceID, Details: details,
 	})
+	// Notify any active discovery transport (e.g. Zenoh) so it can route the
+	// approval back to the waiting agent.
+	if s.OnApproved != nil {
+		go s.OnApproved(r.Context(), p.DeviceID)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

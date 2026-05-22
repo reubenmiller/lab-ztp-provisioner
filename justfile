@@ -36,6 +36,20 @@ agent:
 agent-ble:
     {{go}} build {{goflags}} -tags ble -ldflags '{{ldflags}}' -o {{bin_dir}}/ztp-agent-ble ./cmd/ztp-agent
 
+# Build the agent with Zenoh discovery compiled in.
+# Requires zenoh-c ≥ 1.9.0 installed via the *-standalone.zip release asset
+# (https://github.com/eclipse-zenoh/zenoh-c/releases).
+# CGO_LDFLAGS forces the linker to use the local library path rather than the
+# CI path baked into the dylib's install name on macOS.
+agent-zenoh:
+    CGO_LDFLAGS="-L/usr/local/lib /usr/local/lib/libzenohc.a" \
+    {{go}} build {{goflags}} -tags zenoh -ldflags '{{ldflags}}' -o {{bin_dir}}/ztp-agent-zenoh ./cmd/ztp-agent
+
+# Build the server with Zenoh discovery compiled in (see agent-zenoh for requirements).
+server-zenoh:
+    CGO_LDFLAGS="-L/usr/local/lib /usr/local/lib/libzenohc.a" \
+    {{go}} build {{goflags}} -tags zenoh -ldflags '{{ldflags}}' -o {{bin_dir}}/ztp-server-zenoh ./cmd/ztp-server
+
 # Cross-compile the BLE agent for a Linux device (e.g. Raspberry Pi).
 # BLE peripheral mode requires Linux (BlueZ); this is the typical deployment target.
 #   just cross-agent-ble        # linux/amd64 (default)
@@ -707,6 +721,28 @@ mdns-discover:
 # Run the server locally with the example config (in-memory store).
 run-server:
     {{bin_dir}}/ztp-server -config examples/ztp-server.yaml -v
+
+# Run the zenoh-capable server locally (requires: just server-zenoh).
+# Zenoh discovery is enabled in the example config (listen_addr tcp/0.0.0.0:7447).
+run-server-zenoh:
+    {{bin_dir}}/ztp-server-zenoh -config examples/ztp-server.yaml -v
+
+# Run the zenoh-capable agent for local testing (requires: just agent-zenoh).
+# State (identity key, sentinel) is stored under /tmp/ztp-dev so it doesn't
+# require root. Pass an extra device ID argument to run multiple agents:
+#   just run-agent-zenoh my-device-2
+run-agent-zenoh device="dev-device-1":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p /tmp/ztp-dev
+    {{bin_dir}}/ztp-agent-zenoh \
+        --transport zenoh,ble \
+        --zenoh-router tcp/localhost:7447 \
+        --identity /tmp/ztp-dev/{{device}}.key \
+        --sentinel /tmp/ztp-dev/{{device}}.provisioned \
+        --device-id {{device}} \
+        --force \
+        -v
 
 # Print the server's public key (so devices can trust it).
 server-pubkey config="examples/ztp-server.yaml":

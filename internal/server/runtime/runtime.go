@@ -197,6 +197,15 @@ func Start(ctx context.Context, opts Options) (*Handle, error) {
 	mdnsActive := publisher != nil
 	apiSrv.MDNSActive = mdnsActive
 
+	// Start Zenoh discovery (no-op when not built with -tags zenoh or when
+	// cfg.Zenoh.Enabled is false).  Must happen before the HTTP server starts
+	// accepting connections so that apiSrv.OnApproved is set before any
+	// operator can call the approve endpoint.
+	zenohStop, zenohApprove := startZenohDiscovery(ctx, cfg.Zenoh, baseURL, st, hub, logger)
+	if zenohApprove != nil {
+		apiSrv.OnApproved = zenohApprove
+	}
+
 	tlsOpts := tlsmode.Options{
 		CertFile:  cfg.TLS.Cert,
 		KeyFile:   cfg.TLS.Key,
@@ -224,6 +233,7 @@ func Start(ctx context.Context, opts Options) (*Handle, error) {
 		resolver:      resolver,
 		hub:           hub,
 		serveErr:      serveErr,
+		zenohStop:     zenohStop,
 	}, nil
 }
 

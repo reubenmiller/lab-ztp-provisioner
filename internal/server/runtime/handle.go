@@ -57,6 +57,7 @@ type Handle struct {
 	resolver   *profiles.Resolver
 	hub        *api.Hub
 	serveErr   chan error
+	zenohStop  func() // non-nil when Zenoh discovery is running
 }
 
 // Reload re-reads the profile directory and re-resolves every
@@ -93,6 +94,9 @@ func (h *Handle) Reload(ctx context.Context) error {
 func (h *Handle) Shutdown(ctx context.Context) error {
 	if h == nil {
 		return nil
+	}
+	if h.zenohStop != nil {
+		h.zenohStop()
 	}
 	if h.publisher != nil {
 		_ = h.publisher.Close()

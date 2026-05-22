@@ -219,7 +219,7 @@ func TestRunMultiTransport_HTTPFails_BLECalled(t *testing.T) {
 	defer cancel()
 
 	scanCfg := scanConfig{serverPubKey: pubKeyStr}
-	err := runMultiTransport(ctx, []string{"http", "ble"}, candidates, baseCfg, scanCfg, 0, "", true, testLogger(t))
+	err := runMultiTransport(ctx, []string{"http", "ble"}, candidates, baseCfg, scanCfg, 0, "", true, "", testLogger(t))
 	if err != nil {
 		t.Fatalf("expected BLE to succeed, got: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestRunMultiTransport_RejectedNoBLE(t *testing.T) {
 	defer cancel()
 
 	// Empty pubKeyStr forces per-candidate fetch from /v1/server-info.
-	err := runMultiTransport(ctx, []string{"http", "ble"}, candidates, baseCfg, scanConfig{}, 0, "", true, testLogger(t))
+	err := runMultiTransport(ctx, []string{"http", "ble"}, candidates, baseCfg, scanConfig{}, 0, "", true, "", testLogger(t))
 	if err == nil {
 		t.Fatal("expected rejection error, got nil")
 	}
@@ -328,7 +328,7 @@ func TestRunMultiTransport_PendingNotFallenBack(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err := runMultiTransport(ctx, []string{"http", "ble"}, candidates, baseCfg, scanConfig{}, 0, "", true, testLogger(t))
+	err := runMultiTransport(ctx, []string{"http", "ble"}, candidates, baseCfg, scanConfig{}, 0, "", true, "", testLogger(t))
 	if err != nil {
 		t.Fatalf("expected success after pending→accepted, got: %v", err)
 	}
@@ -481,7 +481,7 @@ func TestRunMultiTransport_ScannerWinsBLECancelled(t *testing.T) {
 	defer cancel()
 
 	// Empty initial candidates forces entry into Phase 2 (race).
-	err := runMultiTransport(ctx, []string{"http", "ble"}, nil, baseCfg, scanCfg, 50*time.Millisecond, "", true, testLogger(t))
+	err := runMultiTransport(ctx, []string{"http", "ble"}, nil, baseCfg, scanCfg, 50*time.Millisecond, "", true, "", testLogger(t))
 	if err != nil {
 		t.Fatalf("expected scanner to win, got: %v", err)
 	}
@@ -519,7 +519,7 @@ func TestRunMultiTransport_BLEWinsScannerCancelled(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err := runMultiTransport(ctx, []string{"http", "ble"}, nil, baseCfg, scanCfg, 50*time.Millisecond, "", true, testLogger(t))
+	err := runMultiTransport(ctx, []string{"http", "ble"}, nil, baseCfg, scanCfg, 50*time.Millisecond, "", true, "", testLogger(t))
 	if err != nil {
 		t.Fatalf("expected BLE to win, got: %v", err)
 	}
@@ -549,7 +549,7 @@ func TestRunMultiTransport_ScanIntervalZeroLegacy(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err := runMultiTransport(ctx, []string{"http", "ble"}, nil, baseCfg, scanConfig{}, 0, "", true, testLogger(t))
+	err := runMultiTransport(ctx, []string{"http", "ble"}, nil, baseCfg, scanConfig{}, 0, "", true, "", testLogger(t))
 	if err != nil {
 		t.Fatalf("expected BLE to succeed, got: %v", err)
 	}

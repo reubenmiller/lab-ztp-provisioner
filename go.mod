@@ -19,6 +19,8 @@ require (
 	tinygo.org/x/bluetooth v0.15.0
 )
 
+require github.com/BooleanCat/option v0.1.0 // indirect
+
 require (
 	al.essio.dev/pkg/shellescape v1.5.1 // indirect
 	filippo.io/hpke v0.4.0 // indirect
@@ -26,6 +28,7 @@ require (
 	github.com/bep/debounce v1.2.1 // indirect
 	github.com/danieljoos/wincred v1.2.2 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/eclipse-zenoh/zenoh-go v1.9.0
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect

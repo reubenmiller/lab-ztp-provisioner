@@ -68,7 +68,44 @@ type Config struct {
 
 	Store StoreConfig `yaml:"store"`
 	MDNS  MDNSConfig  `yaml:"mdns"`
+	Zenoh ZenohConfig `yaml:"zenoh"`
 	Web   WebConfig   `yaml:"web"`
+}
+
+// ZenohConfig configures Zenoh-based seamless device discovery.
+//
+// The server can either connect to an external Zenoh router (RouterURL) or
+// act as the router itself (ListenAddr).  For local development the simplest
+// setup is to set ListenAddr; agents then use --zenoh-router pointing at the
+// server's address and no separate router process is needed.
+//
+// Example — server acts as router (recommended for local dev):
+//
+//	zenoh:
+//	  enabled: true
+//	  listen_addr: "tcp/0.0.0.0:7447"
+//
+// Example — server connects to an external router:
+//
+//	zenoh:
+//	  enabled: true
+//	  router_url: "tcp/ztp-router.local:7447"
+type ZenohConfig struct {
+	// Enabled activates the Zenoh discovery subscriber on server startup.
+	// Requires the server binary to be compiled with -tags zenoh.
+	Enabled bool `yaml:"enabled"`
+
+	// ListenAddr makes the ZTP server act as a Zenoh router itself.
+	// Agents connect to this address via --zenoh-router; no separate
+	// router process is needed.  Format: "tcp/0.0.0.0:7447".
+	// Takes precedence over RouterURL when both are set.
+	ListenAddr string `yaml:"listen_addr"`
+
+	// RouterURL is the Zenoh router endpoint to connect to when an
+	// external router is preferred, e.g. "tcp/ztp-router.local:7447".
+	// When empty (and ListenAddr is also empty) the server falls back to
+	// Zenoh's default peer-discovery scouting (suitable for a single LAN).
+	RouterURL string `yaml:"router_url"`
 }
 
 // C8YCredential is one named shared credential entry available to

@@ -1,7 +1,7 @@
 # Example ZTP server config.
 # Copy to ztp-server.yaml and edit.
 
-listen: ":8080"
+listen: ":8081"
 
 # Bearer token for the admin API + SPA access. May also be supplied via the
 # ZTP_ADMIN_TOKEN environment variable (preferred — keeps secrets out of
@@ -62,3 +62,43 @@ verifiers:
 # overridden from the UI.
 profiles_dir: "/etc/ztp/profiles.d"
 default_profile: "default"
+
+# mDNS service discovery. When enabled the server advertises itself on the
+# local network so agents can find it without a pre-configured URL.
+mdns:
+  enabled: true
+  service: "_ztp._tcp"
+
+# Zenoh-based seamless device discovery (experimental — Phase 1 POC).
+# Requires the server binary to be rebuilt with -tags zenoh AND zenoh-c
+# installed on the build host.
+#
+# When enabled, unprovisioned agents that run with --transport zenoh will
+# appear in the admin UI without any manual IP configuration.
+#
+# Workflow:
+#   1. Agent boots with --transport zenoh --zenoh-router tcp/<host>:7447
+#   2. Device appears in admin "Pending" list.
+#   3. Operator approves (SPA or POST /v1/admin/pending/{id}/approve).
+#   4. Server publishes an approval with its HTTPS URL back to the agent.
+#   5. Agent enrolls via standard HTTPS enrollment.
+#
+# listen_addr: the ZTP server acts as the Zenoh router — no separate router
+# process is needed.  Agents connect with --zenoh-router tcp/<this-host>:7447.
+# Recommended for local dev and simple deployments.
+#
+# router_url: connect to an external Zenoh router instead.  Useful when
+# multiple ZTP servers share the same router, or when the router is provided
+# by the network infrastructure.  Leave both empty to use Zenoh's default
+# multicast scouting (same LAN only).
+zenoh:
+  enabled: true
+  listen_addr: "tcp/0.0.0.0:7448"
+  # router_url: "tcp/ztp-router.local:7447"
+
+# Persistence backend.
+# driver: "memory"  — ephemeral (default; suitable for dev / CI)
+# driver: "sqlite"  — persistent; set dsn to the database file path.
+store:
+  driver: "memory"
+  dsn: ""

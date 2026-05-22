@@ -126,7 +126,7 @@ returned bundle before any applier runs.`,
 	f.String("applier-debug", "", "Applier debug verbosity.\n\t  1 / verbose — log stdout/stderr of every applier, not only failures.\n\t  trace       — pass -x to the shell interpreter (prints every command).\n\tAlso configurable via ZTP_APPLIER_DEBUG env var.")
 	f.Bool("mdns", true, "Discover the ZTP server on the local network via mDNS/DNS-SD.\n\tThe server advertises itself as _ztp._tcp; its pubkey is included in\n\tthe TXT record so no --server-pubkey flag is needed on LAN deployments.\n\tEnabled by default for zero-config LAN deployments.")
 	f.String("mdns-service", "_ztp._tcp", "mDNS `service type` to query for server discovery.\n\tChange only when the server is configured with a custom service name.")
-	f.String("transport", "auto", "Ordered comma-separated list of enrollment `transport`s to attempt.\n\tEach transport is tried in order; the first successful enrollment wins.\n\tValid tokens: http, ble, auto\n\t  auto     — expands to 'http,ble' on BLE-capable builds, 'http' otherwise.\n\t  http     — HTTPS enrollment directly to --server / --server-list candidates.\n\t  ble      — BLE peripheral mode (Linux only, requires -tags ble build).\n\tExamples: auto, http, ble, http,ble, ble,http")
+	f.String("transport", "auto", "Ordered comma-separated list of enrollment `transport`s to attempt.\n\tEach transport is tried in order; the first successful enrollment wins.\n\tValid tokens: http, ble, zenoh, auto\n\t  auto     — expands to 'http,ble' on BLE-capable builds, 'http' otherwise.\n\t  http     — HTTPS enrollment directly to --server / --server-list candidates.\n\t  ble      — BLE peripheral mode (Linux only, requires -tags ble build).\n\t  zenoh    — Publish a discovery beacon over Zenoh; the operator approves\n\t            the device in the admin UI and the agent enrolls via HTTP.\n\tWhen multiple non-http transports are listed (e.g. zenoh,ble) they run\n\tconcurrently after the HTTP fast-path; whichever channel gets approved first wins.\n\tExamples: auto, http, ble, zenoh, zenoh,ble, http,zenoh,ble")
 	f.Duration("scan-interval", 30*time.Second, "Interval between background HTTP/mDNS rescans after the initial probe.\n\tWhen >0 and the first HTTP attempt fails, the agent keeps re-running\n\tmDNS discovery and TCP-probing static --server-list URLs at this cadence,\n\tracing the resulting attempts against any BLE peripheral session. As\n\tsoon as a server becomes reachable (e.g. when a network cable is\n\tplugged in mid-boot), HTTP enrollment proceeds and BLE is cancelled.\n\tSet to 0 to disable rescanning (legacy one-shot behaviour).\n\tAlso configurable via ZTP_SCAN_INTERVAL env var (e.g. \"45s\", \"2m\").")
 	f.Bool("encrypt", false, "Request a fully end-to-end encrypted bundle (X25519+ChaCha20-Poly1305).\n\tSensitive per-module payloads (e.g. Cumulocity tokens) are always sealed\n\tregardless of this flag. Use --encrypt when the transport is untrusted\n\t(e.g. BLE relay).")
 	f.Bool("insecure", false, "Skip TLS certificate verification entirely.\n\tFor development/testing only — never use in production.")
@@ -134,6 +134,7 @@ returned bundle before any applier runs.`,
 	f.String("debug", "", "Dump the provisioning bundle to stderr before applying.\n\t  (no value) / 1 / true / yes / on — dump, then run appliers\n\t  only / dump / inspect — dump, then exit 0 without applying\n\tAlso configurable via ZTP_DEBUG env var; the flag takes precedence.")
 	f.String("ble-name-prefix", "ztp-", "Prefix prepended to the device id in the BLE advertising name.\n\tDefault \"ztp-\" gives names like \"ztp-<device-id>\" in BLE scanners.\n\tSet to an empty string to advertise the bare device id.\n\tAlso configurable via ZTP_BLE_NAME_PREFIX env var.")
 	f.String("system-clock", "auto", "Policy for adjusting the device's system real-time clock from the\n\tverified bundle's issued_at timestamp before appliers run.\n\t  auto    — advance the clock when it is more than 60s behind (default).\n\t  off     — never touch the system clock (use when chronyd / NTP manages it).\n\t  always  — adjust unconditionally, forwards or backwards.\n\tFixes downstream TLS NotBefore failures (e.g. tedge cert download c8y)\n\ton devices that boot before any time-sync mechanism is available.\n\tRequires CAP_SYS_TIME (root); a missing capability is logged as a warning\n\tand provisioning continues. Also configurable via ZTP_SYSTEM_CLOCK env var.")
+	f.String("zenoh-router", "", "Zenoh router `endpoint` used when --transport includes zenoh,\n\te.g. tcp/localhost:7447 or tcp/ztp-router.local:7447.\n\tWhen empty the agent relies on Zenoh's default peer-discovery scouting\n\t(suitable for single-LAN deployments without a dedicated router).\n\tAlso configurable via ZTP_ZENOH_ROUTER env var.")
 
 	// Bind flags to viper keys. Underscore keys match the TOML config file
 	// and map to env vars as ZTP_<UPPERCASE_KEY> via AutomaticEnv.
@@ -166,6 +167,7 @@ returned bundle before any applier runs.`,
 	_ = v.BindPFlag("debug", f.Lookup("debug"))
 	_ = v.BindPFlag("ble_name_prefix", f.Lookup("ble-name-prefix"))
 	_ = v.BindPFlag("system_clock", f.Lookup("system-clock"))
+	_ = v.BindPFlag("zenoh_router", f.Lookup("zenoh-router"))
 
 	v.SetEnvPrefix("ZTP")
 	v.AutomaticEnv()
@@ -222,6 +224,7 @@ func runAgent(cmd *cobra.Command, args []string) error {
 	debugVal := v.GetString("debug")
 	bleNamePrefix := v.GetString("ble_name_prefix")
 	systemClockStr := v.GetString("system_clock")
+	zenohRouter := v.GetString("zenoh_router")
 
 	systemClockPolicy, err := clock.ParsePolicy(systemClockStr)
 	if err != nil {
@@ -326,7 +329,7 @@ func runAgent(cmd *cobra.Command, args []string) error {
 		mdnsService:  mdnsService,
 		serverPubKey: serverPubKeyStr,
 	}
-	if err := runMultiTransport(ctx, transports, candidates, baseCfg, scanCfg, scanInterval, caFile, insecure, logger); err != nil {
+	if err := runMultiTransport(ctx, transports, candidates, baseCfg, scanCfg, scanInterval, caFile, insecure, zenohRouter, logger); err != nil {
 		return fmt.Errorf("provisioning failed: %w", err)
 	}
 
@@ -391,7 +394,7 @@ func parseTransportList(s string) ([]string, error) {
 	for _, tok := range splitCSV(s) {
 		var expanded []string
 		switch tok {
-		case "http", "ble":
+		case "http", "ble", "zenoh":
 			expanded = []string{tok}
 		case "auto":
 			expanded = []string{"http"}
@@ -399,7 +402,7 @@ func parseTransportList(s string) ([]string, error) {
 				expanded = append(expanded, "ble")
 			}
 		default:
-			return nil, fmt.Errorf("unknown transport %q; valid values: http, ble, auto (or comma-separated list e.g. http,ble)", tok)
+			return nil, fmt.Errorf("unknown transport %q; valid values: http, ble, zenoh, auto (or comma-separated list e.g. http,ble)", tok)
 		}
 		for _, t := range expanded {
 			if !seen[t] {
@@ -645,14 +648,22 @@ func scanAndEnroll(
 // Phase 1 (fast path): if HTTP is in the transport list, try the candidates
 // already probed at startup. Success → return; non-network error → return.
 //
-// Phase 2 (concurrent fallback): if Phase 1 exhausted HTTP candidates without
-// success, run BLE (if requested + capable) and a periodic HTTP rescanner
-// (if scan_interval > 0) concurrently under a shared cancellation context.
-// The first to succeed wins; the loser is cancelled. If a worker returns a
-// terminal error, the other is cancelled and the error is propagated.
+// Phase 2 (concurrent): if Phase 1 exhausted HTTP candidates without success,
+// run any combination of zenoh discovery, BLE peripheral, and a periodic HTTP
+// rescanner concurrently under a shared cancellation context. The first worker
+// to succeed wins and cancels the others. A terminal error from any worker
+// cancels the rest and is propagated immediately.
 //
-// When scan_interval == 0 the rescanner is disabled, restoring the legacy
-// one-shot HTTP-then-BLE behaviour.
+//   - zenoh: publishes a discovery beacon, waits for operator approval, then
+//     enrolls via HTTP using the server URL from the approval message.
+//   - ble: advertises a GATT peripheral; a BLE relay connects and proxies the
+//     full enrollment request/response to the server.
+//   - http-scan: periodically re-probes --server / mDNS for a newly-reachable
+//     server (disabled when scan_interval == 0).
+//
+// Running zenoh and BLE concurrently lets a device be discoverable over both
+// the local network and Bluetooth simultaneously; whichever channel the
+// operator uses to approve the device wins.
 func runMultiTransport(
 	ctx context.Context,
 	transports []string,
@@ -662,15 +673,18 @@ func runMultiTransport(
 	scanInterval time.Duration,
 	caFile string,
 	insecure bool,
+	zenohRouter string,
 	logger *slog.Logger,
 ) error {
-	var httpReq, bleReq bool
+	var httpReq, bleReq, zenohReq bool
 	for _, t := range transports {
 		switch t {
 		case "http":
 			httpReq = true
 		case "ble":
 			bleReq = true
+		case "zenoh":
+			zenohReq = true
 		}
 	}
 
@@ -686,14 +700,23 @@ func runMultiTransport(
 		logger.Info("HTTP exhausted on initial probe; entering concurrent scan/BLE phase")
 	}
 
-	// Phase 2: race the BLE peripheral against a periodic HTTP rescanner.
+	// Phase 2: race zenoh, BLE, and an HTTP rescanner concurrently.
+	// Zenoh discovery blocks until the operator approves the device (or ctx is
+	// cancelled), then enrolls via HTTP using the server URL from the approval.
+	// BLE blocks until a relay connects and completes enrollment.
+	// HTTP rescan periodically re-probes for a newly-reachable server.
+	// The first worker to succeed wins; the others are cancelled.
+	runZenoh := zenohReq && zenohDiscoveryRunner != nil
 	runScanner := httpReq && scanInterval > 0
 	runBLE := bleReq && bleCapable && bleRunner != nil
+	if zenohReq && zenohDiscoveryRunner == nil {
+		logger.Warn("zenoh transport requested but not available; rebuild with -tags zenoh")
+	}
 	if bleReq && (!bleCapable || bleRunner == nil) {
 		logger.Warn("BLE transport requested but not available on this platform; rebuild for Linux with -tags ble")
 	}
 
-	if !runScanner && !runBLE {
+	if !runZenoh && !runScanner && !runBLE {
 		return fmt.Errorf("all transports exhausted: %w", agent.ErrServerUnreachable)
 	}
 
@@ -704,9 +727,17 @@ func runMultiTransport(
 		source string
 		err    error
 	}
-	resCh := make(chan workerResult, 2)
+	resCh := make(chan workerResult, 3)
 	workers := 0
 
+	if runZenoh {
+		workers++
+		go func() {
+			logger.Info("trying zenoh discovery transport")
+			err := zenohDiscoveryRunner(raceCtx, baseCfg, zenohRouter, logger)
+			resCh <- workerResult{"zenoh", err}
+		}()
+	}
 	if runScanner {
 		workers++
 		go func() {
@@ -717,7 +748,7 @@ func runMultiTransport(
 	if runBLE {
 		workers++
 		go func() {
-			logger.Info("trying BLE transport (concurrent with HTTP rescanner)")
+			logger.Info("trying BLE transport (concurrent with zenoh / HTTP rescanner)")
 			err := bleRunner(raceCtx, baseCfg, logger)
 			resCh <- workerResult{"ble", err}
 		}()
