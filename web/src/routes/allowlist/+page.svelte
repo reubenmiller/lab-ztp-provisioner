@@ -60,6 +60,7 @@
 
 {#if err && !showModal}<p class="err">{err}</p>{/if}
 
+<div class="table-wrap">
 <table>
   <thead><tr><th>Device ID</th><th>MAC</th><th>Serial</th><th>Note</th><th>Profile</th><th>Created</th><th></th></tr></thead>
   <tbody>
@@ -76,6 +77,24 @@
     {/each}
   </tbody>
 </table>
+</div>
+<div class="card-list">
+  {#each items as e (e.device_id)}
+    <div class="al-card">
+      <div class="al-card-id">{e.device_id}</div>
+      <div class="al-card-grid">
+        <div class="al-field"><span class="al-label">MAC</span><span>{e.mac || '—'}</span></div>
+        <div class="al-field"><span class="al-label">Serial</span><span>{e.serial || '—'}</span></div>
+        <div class="al-field al-full"><span class="al-label">Note</span><span>{e.note || '—'}</span></div>
+        <div class="al-field"><span class="al-label">Profile</span><span>{e.profile || '—'}</span></div>
+        <div class="al-field"><span class="al-label">Created</span><span>{new Date(e.created_at).toLocaleString()}</span></div>
+      </div>
+      <div class="al-card-footer">
+        <button class="danger" onclick={() => remove(e.device_id)}>Remove</button>
+      </div>
+    </div>
+  {/each}
+</div>
 
 {#if showModal}
   <div class="modal-backdrop" role="presentation" onclick={closeModal}>
@@ -231,4 +250,59 @@
     font-size: 0.875rem;
   }
   .modal-footer button:hover { background: #30363d; }
+
+  /* Card list (mobile) */
+  .card-list { display: none; }
+  @media (max-width: 900px) {
+    .table-wrap { display: none; }
+    .card-list  { display: flex; flex-direction: column; gap: 0.6rem; }
+  }
+  .al-card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .al-card-id {
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
+    padding: 0.55rem 0.8rem;
+    font-weight: 600;
+    font-size: 0.925rem;
+  }
+  .al-card-grid { display: grid; grid-template-columns: 1fr 1fr; }
+  .al-field {
+    display: flex;
+    flex-direction: column;
+    padding: 0.35rem 0.75rem 0.4rem;
+    font-size: 0.875rem;
+    border-bottom: 1px solid var(--border);
+    min-width: 0;
+  }
+  .al-full { grid-column: 1 / -1; }
+  .al-label {
+    font-size: 0.6rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--text-dim);
+    margin-bottom: 0.15rem;
+  }
+  .al-card-footer {
+    display: flex;
+    justify-content: flex-end;
+    padding: 0.45rem 0.75rem;
+    background: var(--surface-2);
+    border-top: 1px solid var(--border);
+  }
+  .al-card-footer button.danger {
+    padding: 0.3rem 0.75rem;
+    background: var(--danger);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.875rem;
+  }
+  .al-card-footer button.danger:hover { filter: brightness(1.1); }
 </style>

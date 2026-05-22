@@ -15,6 +15,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/thin-edge/tedge-zerotouch-provisioning/pkg/knownhosts"
 )
 
 func usage() {
@@ -69,7 +71,18 @@ func main() {
 		do("GET", "/v1/admin/devices", nil)
 	case strings.HasPrefix(cmd, "devices rm"):
 		mustArg(args, "device-id")
-		do("DELETE", "/v1/admin/devices/"+args[0], nil)
+		devID := args[0]
+		hostname := getDeviceHostname(devID)
+		do("DELETE", "/v1/admin/devices/"+devID, nil)
+		// Clean up the local known_hosts entry unless explicitly disabled.
+		// ZTP_CLEAN_KNOWN_HOSTS=0 or ZTP_CLEAN_KNOWN_HOSTS=false opts out.
+		if hostname != "" && !cleanKnownHostsDisabled() {
+			if err := knownhosts.Remove("", hostname); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: known_hosts cleanup: %v\n", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "removed known_hosts entry for %s\n", hostname)
+			}
+		}
 	case cmd == "allowlist list":
 		do("GET", "/v1/admin/allowlist", nil)
 	case strings.HasPrefix(cmd, "allowlist add"):
@@ -192,4 +205,45 @@ func do(method, path string, body any) {
 func fail(err error) {
 	fmt.Fprintln(os.Stderr, "error:", err)
 	os.Exit(1)
+}
+
+// getDeviceHostname fetches the device record and returns its hostname, or an
+// empty string if the device has no hostname or the request fails. Non-fatal:
+// a missing hostname simply skips the known_hosts cleanup step.
+func getDeviceHostname(id string) string {
+	server := os.Getenv("ZTP_SERVER")
+	if server == "" {
+		return ""
+	}
+	token := os.Getenv("ZTP_TOKEN")
+	req, err := http.NewRequest("GET", server+"/v1/admin/devices/"+id, nil)
+	if err != nil {
+		return ""
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	defer resp.Body.Close()
+	var dev struct {
+		Facts struct {
+			Hostname string `json:"hostname"`
+		} `json:"facts"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&dev); err != nil {
+		return ""
+	}
+	return dev.Facts.Hostname
+}
+
+// cleanKnownHostsDisabled returns true when the operator has set
+// ZTP_CLEAN_KNOWN_HOSTS=0 or ZTP_CLEAN_KNOWN_HOSTS=false to opt out of the
+// automatic known_hosts cleanup that runs after `devices rm`.
+func cleanKnownHostsDisabled() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("ZTP_CLEAN_KNOWN_HOSTS")))
+	return v == "0" || v == "false" || v == "no" || v == "off"
 }

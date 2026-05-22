@@ -62,3 +62,14 @@ verifiers:
 # overridden from the UI.
 profiles_dir: "/etc/ztp/profiles.d"
 default_profile: "default"
+
+# SSH known_hosts cleanup.
+# When enabled, the server runs `ssh-keygen -R <hostname>` after a device is
+# deleted, removing the stale host key from the operator's known_hosts file.
+# Only useful for local/native deployments where the server process can reach
+# the operator's home directory. In Docker the process runs as a different user
+# and can't reach ~/.ssh/known_hosts — leave disabled.
+#
+# known_hosts_cleanup:
+#   enabled: false
+#   file: ~/.ssh/known_hosts   # default; supports ~ expansion

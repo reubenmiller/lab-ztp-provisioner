@@ -10,7 +10,8 @@ export type Toast = {
   title: string;
   body?: string;
   href?: string; // optional navigation target when clicked
-  duration: number;
+  copyText?: string; // if set, a "Copy" button writes this to clipboard and dismisses the toast
+  duration: number; // ms; 0 = persistent until manually dismissed
 };
 
 let seq = 0;
@@ -23,7 +24,7 @@ export function getToasts(): Toast[] {
 export function addToast(opts: Omit<Toast, 'id'>): void {
   const id = ++seq;
   toasts.push({ id, ...opts });
-  setTimeout(() => removeToast(id), opts.duration);
+  if (opts.duration > 0) setTimeout(() => removeToast(id), opts.duration);
 }
 
 export function removeToast(id: number): void {

@@ -66,9 +66,10 @@ type Config struct {
 	// an entrypoint-specific external lookup such as the desktop app keyring.
 	C8YCredentials map[string]C8YCredential `yaml:"c8y_credentials"`
 
-	Store StoreConfig `yaml:"store"`
-	MDNS  MDNSConfig  `yaml:"mdns"`
-	Web   WebConfig   `yaml:"web"`
+	Store             StoreConfig             `yaml:"store"`
+	MDNS              MDNSConfig              `yaml:"mdns"`
+	Web               WebConfig               `yaml:"web"`
+	KnownHostsCleanup KnownHostsCleanupConfig `yaml:"known_hosts_cleanup"`
 }
 
 // C8YCredential is one named shared credential entry available to
@@ -141,6 +142,23 @@ type TLSConfig struct {
 type WebConfig struct {
 	Dir      string `yaml:"dir"`
 	Disabled bool   `yaml:"disabled"`
+}
+
+// KnownHostsCleanupConfig controls automatic removal of known_hosts entries
+// when a device is deleted. When Enabled, the server runs
+// `ssh-keygen -R <hostname>` against File after a successful device deletion.
+// This eliminates the common "host key verification failed" problem that
+// occurs when a device re-enrolls with a new SSH host key.
+//
+// Only effective when the server process has access to the operator's
+// ~/.ssh/known_hosts file (i.e. local/native deployments, not Docker).
+// Disabled by default.
+type KnownHostsCleanupConfig struct {
+	// Enabled activates the feature. Default false.
+	Enabled bool `yaml:"enabled"`
+	// File is the path to the known_hosts file. Supports ~ expansion.
+	// Default: ~/.ssh/known_hosts
+	File string `yaml:"file"`
 }
 
 // PayloadConfig is removed. Built-in provider configuration now lives in

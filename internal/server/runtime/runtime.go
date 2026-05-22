@@ -158,6 +158,7 @@ func Start(ctx context.Context, opts Options) (*Handle, error) {
 		EncryptionRecipients: buildEncryptionRecipients(ageIdentity, cfg.AgeRecipients),
 		ProfilesDir:          cfg.ProfilesDir,
 		AgeIdentity:          ageIdentity,
+		KnownHostsCleanup:    cfg.KnownHostsCleanup,
 	}
 	if len(opts.AgentScript) > 0 {
 		apiSrv.AgentScript = opts.AgentScript

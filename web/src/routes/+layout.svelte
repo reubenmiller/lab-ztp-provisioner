@@ -514,6 +514,15 @@
   }
   main { padding: 1.5rem; flex: 1; }
 
+  /* ── Responsive table wrapper (desktop only) ────────────────────── */
+  /* Pages that need a card layout at narrow widths use a separate
+     .card-list block in their own component — no global table→grid hack. */
+  :global(.table-wrap) {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin-bottom: 0.5rem;
+  }
+
   /* ── Login overlay ──────────────────────────────────────────────── */
   .login-overlay {
     min-height: 100vh;

@@ -675,6 +675,7 @@ payload:
     {#if c8yCredentials.length === 0}
       <p class="warn">No stored Cumulocity credentials.</p>
     {:else}
+      <div class="table-wrap">
       <table class="cred-table">
         <thead>
           <tr>
@@ -699,6 +700,23 @@ payload:
           {/each}
         </tbody>
       </table>
+      </div>
+      <div class="card-list">
+        {#each c8yCredentials as c (c.id)}
+          <div class="cred-card">
+            <div class="cred-card-id">{c.id}</div>
+            <div class="cred-card-grid">
+              <div class="cred-field cred-full"><span class="cred-label">URL</span><span>{c.url || '—'}</span></div>
+              <div class="cred-field"><span class="cred-label">Username</span><span>{c.username || '—'}</span></div>
+              <div class="cred-field"><span class="cred-label">Secret</span><span>{c.hasSecret ? 'stored' : 'missing'}</span></div>
+              <div class="cred-field cred-full"><span class="cred-label">Updated</span><span>{c.updatedAt || '—'}</span></div>
+            </div>
+            <div class="cred-card-footer">
+              <button class="danger" onclick={() => deleteC8YCredential(c.id)}>Delete</button>
+            </div>
+          </div>
+        {/each}
+      </div>
     {/if}
   </section>
 {/if}
@@ -948,4 +966,59 @@ payload:
     line-height: 1.5;
     box-shadow: 0 4px 16px rgba(0,0,0,0.4) !important;
   }
+
+  /* Credentials card list (mobile) */
+  .card-list { display: none; }
+  @media (max-width: 900px) {
+    .table-wrap { display: none; }
+    .card-list  { display: flex; flex-direction: column; gap: 0.6rem; }
+  }
+  .cred-card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .cred-card-id {
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
+    padding: 0.55rem 0.8rem;
+    font-weight: 600;
+    font-size: 0.925rem;
+  }
+  .cred-card-grid { display: grid; grid-template-columns: 1fr 1fr; }
+  .cred-field {
+    display: flex;
+    flex-direction: column;
+    padding: 0.35rem 0.75rem 0.4rem;
+    font-size: 0.875rem;
+    border-bottom: 1px solid var(--border);
+    min-width: 0;
+  }
+  .cred-full { grid-column: 1 / -1; }
+  .cred-label {
+    font-size: 0.6rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--text-dim);
+    margin-bottom: 0.15rem;
+  }
+  .cred-card-footer {
+    display: flex;
+    justify-content: flex-end;
+    padding: 0.45rem 0.75rem;
+    background: var(--surface-2);
+    border-top: 1px solid var(--border);
+  }
+  .cred-card-footer button.danger {
+    padding: 0.3rem 0.75rem;
+    background: var(--danger);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.875rem;
+  }
+  .cred-card-footer button.danger:hover { filter: brightness(1.1); }
 </style>
