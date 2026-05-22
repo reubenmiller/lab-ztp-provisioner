@@ -9,6 +9,7 @@
   import { yamlSchema } from 'codemirror-json-schema/yaml';
   import { profileSchema } from '$lib/profile-schema';
   import { api } from '$lib/api';
+  import { addToast } from '$lib/toasts.svelte';
   import {
     detect,
     type C8YCredential,
@@ -28,8 +29,7 @@
   let desktop = $state<DesktopRuntimeInfo | null>(null);
   // null = probing, true = available, false = not configured
   let configApiAvailable = $state<boolean | null>(null);
-  let err = $state<string | null>(null);
-  let msg = $state<string | null>(null);
+  let revealing = $state(false);
   let recipients = $state<string[]>([]);
   let c8yCredentials = $state<C8YCredential[]>([]);
   let credentialId = $state('');
@@ -300,13 +300,12 @@ payload:
 
   function insertSnippet(s: Snippet) {
     const doc = getEditorContent();
-    err = null;
     const ind = doc.trim() ? detectIndent(doc) : '  ';
 
     // ── skeleton ─────────────────────────────────────────────────────────────
     if (s.kind === 'skeleton') {
       if (doc.trim().length > 0) {
-        err = 'Cannot insert skeleton: editor already has content.';
+        addToast({ kind: 'error', title: 'Cannot insert skeleton: editor already has content.', duration: 5000 });
         return;
       }
       setEditorContent(reindent(s.yaml, ind));
@@ -320,7 +319,7 @@ payload:
       const escapedKey = s.key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const escapedInd = ind.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       if (new RegExp(`^${escapedInd}${escapedKey}:`, 'm').test(doc)) {
-        err = `'payload.${s.key}' already exists — edit it directly.`;
+        addToast({ kind: 'error', title: `'payload.${s.key}' already exists — edit it directly.`, duration: 5000 });
         return;
       }
       const snippet = reindent(s.yaml, ind);
@@ -351,7 +350,7 @@ payload:
     if (s.kind === 'top') {
       const escapedKey = s.key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       if (new RegExp(`^${escapedKey}:`, 'm').test(doc)) {
-        err = `'${s.key}' already exists — edit it directly.`;
+        addToast({ kind: 'error', title: `'${s.key}' already exists — edit it directly.`, duration: 5000 });
         return;
       }
       const snippet = reindent(s.yaml, ind);
@@ -389,7 +388,7 @@ payload:
       const keyInfo = await api.profileEncryptionKey();
       recipients = keyInfo.recipients ?? [];
     } catch (e: any) {
-      err = `Could not load encryption recipients: ${e.message ?? e}`;
+      addToast({ kind: 'error', title: 'Could not load encryption recipients', body: e.message ?? String(e), duration: 8000 });
     }
   }
 
@@ -402,7 +401,7 @@ payload:
         if (files.length > 0 && !selectedFile) selectedFile = files[0];
         configApiAvailable = true;
       } catch (e: any) {
-        err = `Could not list profile files: ${e.message ?? e}`;
+        addToast({ kind: 'error', title: 'Could not list profile files', body: e.message ?? String(e), duration: 8000 });
       }
       return;
     }
@@ -422,36 +421,32 @@ payload:
     try {
       c8yCredentials = await fn();
     } catch (e: any) {
-      err = `Could not list Cumulocity credentials: ${e.message ?? e}`;
+      addToast({ kind: 'error', title: 'Could not list Cumulocity credentials', body: e.message ?? String(e), duration: 8000 });
     }
   }
 
   async function saveC8YCredential() {
     const fn = wailsSetC8YCredential();
     if (!fn) return;
-    msg = null;
-    err = null;
     try {
       await fn(credentialId, credentialURL, credentialUsername, credentialPassword);
       credentialPassword = '';
-      msg = `Saved credential ${credentialId}`;
+      addToast({ kind: 'info', title: `Saved credential ${credentialId}`, duration: 4000 });
       await refreshC8YCredentials();
     } catch (e: any) {
-      err = `Could not save Cumulocity credential: ${e.message ?? e}`;
+      addToast({ kind: 'error', title: 'Could not save Cumulocity credential', body: e.message ?? String(e), duration: 8000 });
     }
   }
 
   async function deleteC8YCredential(id: string) {
     const fn = wailsDeleteC8YCredential();
     if (!fn) return;
-    msg = null;
-    err = null;
     try {
       await fn(id);
-      msg = `Deleted credential ${id}`;
+      addToast({ kind: 'info', title: `Deleted credential ${id}`, duration: 4000 });
       await refreshC8YCredentials();
     } catch (e: any) {
-      err = `Could not delete Cumulocity credential: ${e.message ?? e}`;
+      addToast({ kind: 'error', title: 'Could not delete Cumulocity credential', body: e.message ?? String(e), duration: 8000 });
     }
   }
 
@@ -461,44 +456,36 @@ payload:
     try {
       await fn();
     } catch (e: any) {
-      err = `Could not open config directory: ${e.message ?? e}`;
+      addToast({ kind: 'error', title: 'Could not open config directory', body: e.message ?? String(e), duration: 8000 });
     }
   }
 
   function newFile() {
     selectedFile = '';
     setEditorContent('');
-    msg = null;
-    err = null;
   }
 
   async function loadFile() {    if (!selectedFile) return;
-    msg = null;
-    err = null;
     // Desktop mode.
     const fn = wailsReadProfileFile();
     if (fn) {
       try {
         setEditorContent(await fn(selectedFile));
-        msg = `Loaded ${selectedFile}`;
       } catch (e: any) {
-        err = `Could not read file: ${e.message ?? e}`;
+        addToast({ kind: 'error', title: `Could not read ${selectedFile}`, body: e.message ?? String(e), duration: 8000 });
       }
       return;
     }
     // Server mode.
     try {
       setEditorContent(await api.configFileGet(selectedFile));
-      msg = `Loaded ${selectedFile}`;
     } catch (e: any) {
-      err = `Could not read file: ${e.message ?? e}`;
+      addToast({ kind: 'error', title: `Could not read ${selectedFile}`, body: e.message ?? String(e), duration: 8000 });
     }
   }
 
   async function saveFile() {
     if (!effectiveFile) return;
-    msg = null;
-    err = null;
     // Desktop mode: seal locally then write.
     const sealForSaveFn = wailsSealProfileForSave();
     const writeFn = wailsWriteProfileFile();
@@ -508,10 +495,10 @@ payload:
         setEditorContent(sealed);
         await writeFn(effectiveFile, sealed);
         selectedFile = effectiveFile;
-        msg = `Saved ${effectiveFile} (sealed)`;
+        addToast({ kind: 'info', title: `Saved ${effectiveFile}`, body: 'File sealed and written.', duration: 4000 });
         await refreshFiles();
       } catch (e: any) {
-        err = `Could not write file: ${e.message ?? e}`;
+        addToast({ kind: 'error', title: `Could not save ${effectiveFile}`, body: e.message ?? String(e), duration: 8000 });
       }
       return;
     }
@@ -519,21 +506,19 @@ payload:
     try {
       await api.configFilePut(effectiveFile, getEditorContent());
       selectedFile = effectiveFile;
-      msg = `Saved ${effectiveFile}`;
+      addToast({ kind: 'info', title: `Saved ${effectiveFile}`, duration: 4000 });
       await refreshFiles();
       // Re-fetch to show the server-sealed (encrypted) content.
       const sealed = await api.configFileGet(effectiveFile);
       setEditorContent(sealed);
     } catch (e: any) {
-      err = `Could not write file: ${e.message ?? e}`;
+      addToast({ kind: 'error', title: `Could not save ${effectiveFile}`, body: e.message ?? String(e), duration: 8000 });
     }
   }
 
   async function deleteFile() {
     if (!selectedFile) return;
     if (!confirm(`Delete profile "${selectedFile}"? This cannot be undone.`)) return;
-    msg = null;
-    err = null;
     const toDelete = selectedFile;
     // Desktop mode.
     const deleteFn = wailsDeleteProfileFile();
@@ -542,10 +527,10 @@ payload:
         await deleteFn(toDelete);
         selectedFile = '';
         setEditorContent('');
-        msg = `Deleted ${toDelete}`;
+        addToast({ kind: 'info', title: `Deleted ${toDelete}`, duration: 4000 });
         await refreshFiles();
       } catch (e: any) {
-        err = `Could not delete file: ${e.message ?? e}`;
+        addToast({ kind: 'error', title: `Could not delete ${toDelete}`, body: e.message ?? String(e), duration: 8000 });
       }
       return;
     }
@@ -554,32 +539,45 @@ payload:
       await api.configFileDelete(toDelete);
       selectedFile = '';
       setEditorContent('');
-      msg = `Deleted ${toDelete}`;
+      addToast({ kind: 'info', title: `Deleted ${toDelete}`, duration: 4000 });
       await refreshFiles();
     } catch (e: any) {
-      err = `Could not delete file: ${e.message ?? e}`;
+      addToast({ kind: 'error', title: `Could not delete ${toDelete}`, body: e.message ?? String(e), duration: 8000 });
     }
   }
 
-  async function reveal() {    msg = null;
-    err = null;
+  function isSopsEncrypted(text: string): boolean {
+    return /^sops:/m.test(text);
+  }
+
+  async function reveal() {
+    const currentContent = getEditorContent();
+    if (!isSopsEncrypted(currentContent)) {
+      addToast({ kind: 'info', title: 'Already revealed', body: 'No SOPS encryption markers found — content is already plain YAML.', duration: 4000 });
+      return;
+    }
+    revealing = true;
     // Desktop mode.
     const fn = wailsRevealSealedProfile();
     if (fn) {
       try {
-        setEditorContent(await fn(getEditorContent()));
-        msg = 'Revealed decrypted YAML in the editor';
+        setEditorContent(await fn(currentContent));
+        addToast({ kind: 'info', title: 'Revealed decrypted YAML in the editor', duration: 4000 });
       } catch (e: any) {
-        err = `Reveal failed: ${e.message ?? e}`;
+        addToast({ kind: 'error', title: 'Reveal failed', body: e.message ?? String(e), duration: 8000 });
+      } finally {
+        revealing = false;
       }
       return;
     }
     // Server mode.
     try {
-      setEditorContent(await api.configReveal(getEditorContent()));
-      msg = 'Revealed decrypted YAML in the editor';
+      setEditorContent(await api.configReveal(currentContent));
+      addToast({ kind: 'info', title: 'Revealed decrypted YAML in the editor', duration: 4000 });
     } catch (e: any) {
-      err = `Reveal failed: ${e.message ?? e}`;
+      addToast({ kind: 'error', title: 'Reveal failed', body: e.message ?? String(e), duration: 8000 });
+    } finally {
+      revealing = false;
     }
   }
 
@@ -604,30 +602,50 @@ payload:
 
 <h2>Config and Secrets</h2>
 
-{#if desktop != null}
+<!-- ── 1. Profile File Editor (primary, at top) ───────────────────── -->
+{#if configApiAvailable === false}
   <section class="card">
-    <h3>Storage</h3>
-    <p>Config directory: <code>{desktop.configDir ?? 'n/a'}</code></p>
-    <p>Profiles directory: <code>{desktop.profilesDir ?? 'n/a'}</code></p>
-    <p>Age key file: <code>{desktop.ageKeyFile ?? 'n/a'}</code></p>
-    <button onclick={openConfigDir}>Open Config Directory</button>
+    <p class="warn">Profile file management is not available. Set <code>profiles_dir</code> in <code>ztp-server.yaml</code> to enable it.</p>
+  </section>
+{:else}
+  <section class="card">
+    <h3>Profile File Editor</h3>
+    <div class="row">
+      <select bind:value={selectedFile}>
+        <option value="">— select to load an existing profile —</option>
+        {#each files as f (f)}
+          <option value={f}>{f}</option>
+        {/each}
+      </select>
+      <button onclick={refreshFiles}>Refresh Files</button>
+      <button onclick={newFile}>New</button>
+      <button onclick={loadFile} disabled={!selectedFile}>Load</button>
+      <button onclick={saveFile} disabled={!effectiveFile}
+        title={effectiveFile && effectiveFile !== selectedFile ? `Save as new file: ${effectiveFile}` : ''}>
+        {effectiveFile && effectiveFile !== selectedFile ? `Save as ${effectiveFile}` : 'Save'}
+      </button>
+      <button onclick={deleteFile} disabled={!selectedFile}>Delete</button>
+      <button onclick={reveal} disabled={revealing}>{revealing ? 'Revealing…' : 'Reveal'}</button>
+    </div>
+    <div class="editor-area">
+      <div class="snippet-bar">
+        <p class="snippet-hint">Insert snippet</p>
+        {#each snippets as s}
+          <button class="snippet-btn" title={s.title} onclick={() => insertSnippet(s)}>{s.label}</button>
+        {/each}
+      </div>
+      <div class="editor-shell">
+        <div class="editor" bind:this={editorHost}></div>
+      </div>
+    </div>
+    <p class="hint">
+      Save always seals automatically (tag-based when present, otherwise default regex).
+      {#if desktop != null}Default regex: <code>{desktop.defaultSealRegex ?? 'n/a'}</code>.{/if}
+    </p>
   </section>
 {/if}
 
-<section class="card">
-  <h3>Encryption Recipients</h3>
-  <p>Recipients are loaded from the admin API endpoint used by ztpctl.</p>
-  {#if recipients.length === 0}
-    <p class="warn">No recipients found.</p>
-  {:else}
-    <ul>
-      {#each recipients as r (r)}
-        <li><code>{r}</code></li>
-      {/each}
-    </ul>
-  {/if}
-</section>
-
+<!-- ── 2. Cumulocity Credentials ─────────────────────────────────── -->
 {#if desktop != null}
   <section class="card">
     <h3>Cumulocity Credentials</h3>
@@ -685,59 +703,43 @@ payload:
   </section>
 {/if}
 
-{#if configApiAvailable === false}
-  <section class="card">
-    <p class="warn">Profile file management is not available. Set <code>profiles_dir</code> in <code>ztp-server.yaml</code> to enable it.</p>
-  </section>
-{:else}
-  <section class="card">
-    <h3>Profile File Editor</h3>
-    <div class="row">
-      <select bind:value={selectedFile}>
-        <option value="">— select to load an existing profile —</option>
-        {#each files as f (f)}
-          <option value={f}>{f}</option>
-        {/each}
-      </select>
-      <button onclick={refreshFiles}>Refresh Files</button>
-      <button onclick={newFile}>New</button>
-      <button onclick={loadFile} disabled={!selectedFile}>Load</button>
-      <button onclick={saveFile} disabled={!effectiveFile}
-        title={effectiveFile && effectiveFile !== selectedFile ? `Save as new file: ${effectiveFile}` : ''}>
-        {effectiveFile && effectiveFile !== selectedFile ? `Save as ${effectiveFile}` : 'Save'}
-      </button>
-      <button onclick={deleteFile} disabled={!selectedFile}>Delete</button>
-      <button onclick={reveal}>Reveal</button>
-    </div>
-    <div class="editor-area">
-      <div class="snippet-bar">
-        <p class="snippet-hint">Insert snippet</p>
-        {#each snippets as s}
-          <button class="snippet-btn" title={s.title} onclick={() => insertSnippet(s)}>{s.label}</button>
-        {/each}
-      </div>
-      <div class="editor-shell">
-        <div class="editor" bind:this={editorHost}></div>
-      </div>
-    </div>
-    <p class="hint">
-      Save always seals automatically (tag-based when present, otherwise default regex).
-      {#if desktop != null}Default regex: <code>{desktop.defaultSealRegex ?? 'n/a'}</code>.{/if}
-    </p>
-  </section>
-{/if}
+<!-- ── 3. Advanced ────────────────────────────────────────────────── -->
+<details class="advanced-section">
+  <summary>Advanced</summary>
 
-{#if msg}<p class="ok">{msg}</p>{/if}
-{#if err}<p class="err">{err}</p>{/if}
+  {#if desktop != null}
+    <section class="card">
+      <h3>Storage</h3>
+      <p>Config directory: <code>{desktop.configDir ?? 'n/a'}</code></p>
+      <p>Profiles directory: <code>{desktop.profilesDir ?? 'n/a'}</code></p>
+      <p>Age key file: <code>{desktop.ageKeyFile ?? 'n/a'}</code></p>
+      <button onclick={openConfigDir}>Open Config Directory</button>
+    </section>
+  {/if}
+
+  <section class="card">
+    <h3>Encryption Recipients</h3>
+    <p>Recipients are loaded from the admin API endpoint used by ztpctl.</p>
+    {#if recipients.length === 0}
+      <p class="warn">No recipients found.</p>
+    {:else}
+      <ul>
+        {#each recipients as r (r)}
+          <li><code>{r}</code></li>
+        {/each}
+      </ul>
+    {/if}
+  </section>
+</details>
 
 <style>
   h2 { margin-top: 0; }
   .card {
-    border: 1px solid #30363d;
+    border: 1px solid var(--border);
     border-radius: 8px;
     padding: 1rem;
     margin-bottom: 1rem;
-    background: #0f141b;
+    background: var(--surface-2);
   }
   .row {
     display: flex;
@@ -746,19 +748,20 @@ payload:
     flex-wrap: wrap;
   }
   select {
-    background: #0d1117;
-    color: #e6edf3;
-    border: 1px solid #30363d;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
     border-radius: 6px;
     padding: 0.45rem 0.55rem;
   }
   input {
-    background: #0d1117;
-    color: #e6edf3;
-    border: 1px solid #30363d;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
     border-radius: 6px;
     padding: 0.45rem 0.55rem;
   }
+  select:focus, input:focus { outline: none; border-color: var(--accent); }
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -771,7 +774,7 @@ payload:
     gap: 0.25rem;
   }
   .field label {
-    color: #8b949e;
+    color: var(--text-muted);
     font-size: 0.85rem;
   }
   .editor-area {
@@ -787,16 +790,16 @@ payload:
     flex-shrink: 0;
   }
   .snippet-hint {
-    color: #8b949e;
+    color: var(--text-muted);
     font-size: 0.75rem;
     margin: 0 0 0.15rem 0;
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
   .snippet-btn {
-    background: #161b22;
-    border: 1px solid #30363d;
-    color: #79c0ff;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--accent);
     border-radius: 5px;
     padding: 0.35rem 0.55rem;
     cursor: pointer;
@@ -805,19 +808,18 @@ payload:
     white-space: nowrap;
   }
   .snippet-btn:hover {
-    background: #1f2937;
-    border-color: #58a6ff;
-    color: #58a6ff;
+    background: var(--hover);
+    border-color: var(--accent);
   }
   .editor-shell {
     flex: 1;
     min-width: 0;
     width: 100%;
     min-height: 28rem;
-    border: 1px solid #30363d;
+    border: 1px solid var(--border);
     border-radius: 6px;
     overflow: hidden;
-    background: #0d1117;
+    background: var(--bg);
   }
   .editor {
     min-height: 28rem;
@@ -835,18 +837,21 @@ payload:
     padding: 0.75rem;
   }
   button {
-    background: #21262d;
-    border: 1px solid #30363d;
-    color: #e6edf3;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
     border-radius: 6px;
     padding: 0.45rem 0.7rem;
     cursor: pointer;
+    transition: background 0.12s, opacity 0.12s, transform 0.1s;
   }
+  button:hover { background: var(--hover); }
+  button:active:not(:disabled) { background: var(--hover); opacity: 0.75; transform: scale(0.97); }
   button:disabled { opacity: 0.6; cursor: not-allowed; }
-  .hint { color: #8b949e; font-size: 0.85rem; }
-  .warn { color: #f0883e; }
-  .ok { color: #3fb950; }
-  .err { color: #f85149; }
+  .hint { color: var(--text-muted); font-size: 0.85rem; }
+  .warn { color: var(--warning); }
+  .ok { color: var(--success); }
+  .err { color: var(--danger); }
   .cred-table {
     width: 100%;
     border-collapse: collapse;
@@ -854,24 +859,52 @@ payload:
   }
   .cred-table th,
   .cred-table td {
-    border-bottom: 1px solid #30363d;
+    border-bottom: 1px solid var(--border);
     padding: 0.45rem;
     text-align: left;
   }
   .cred-table th {
-    color: #8b949e;
+    color: var(--text-muted);
     font-weight: 600;
   }
   code {
-    background: #161b22;
+    background: var(--code-bg);
     padding: 0.1rem 0.3rem;
     border-radius: 4px;
   }
 
+  /* ── Advanced section ────────────────────────────────────────────── */
+  .advanced-section {
+    margin-bottom: 1rem;
+  }
+  .advanced-section > summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    padding: 0.4rem 0.1rem;
+    user-select: none;
+  }
+  .advanced-section > summary::before {
+    content: '\25B6';
+    font-size: 0.55rem;
+    transition: transform 0.15s;
+  }
+  .advanced-section[open] > summary::before {
+    transform: rotate(90deg);
+  }
+  .advanced-section > summary:hover { color: var(--text-muted); }
+
   /* ── CodeMirror autocomplete popup — dark theme ─────────────────────────── */
   :global(.cm-tooltip) {
-    background: #1c2128 !important;
-    border: 1px solid #30363d !important;
+    background: var(--surface) !important;
+    border: 1px solid var(--border) !important;
     border-radius: 6px !important;
     box-shadow: 0 8px 24px rgba(0,0,0,0.5) !important;
   }
@@ -882,13 +915,13 @@ payload:
   }
   :global(.cm-tooltip-autocomplete > ul > li) {
     padding: 4px 10px !important;
-    color: #e6edf3 !important;
+    color: var(--text) !important;
     line-height: 1.5;
   }
   /* Clearly highlight the selected item */
   :global(.cm-tooltip-autocomplete > ul > li[aria-selected="true"]) {
-    background: #1f6feb !important;
-    color: #ffffff !important;
+    background: var(--accent-dim2) !important;
+    color: var(--accent) !important;
   }
   /* Key name */
   :global(.cm-completionLabel) {
@@ -896,19 +929,19 @@ payload:
   }
   /* Type hint (e.g. "integer", "string") */
   :global(.cm-completionDetail) {
-    color: #8b949e !important;
+    color: var(--text-muted) !important;
     font-style: italic;
     margin-left: 0.5em;
   }
   :global(.cm-tooltip-autocomplete > ul > li[aria-selected="true"] .cm-completionDetail) {
-    color: #a8c4e8 !important;
+    color: var(--text-muted) !important;
   }
   /* Description / hover tooltip */
   :global(.cm-completionInfo) {
-    background: #1c2128 !important;
-    border: 1px solid #30363d !important;
+    background: var(--surface) !important;
+    border: 1px solid var(--border) !important;
     border-radius: 6px !important;
-    color: #c9d1d9 !important;
+    color: var(--text) !important;
     padding: 6px 10px !important;
     font-size: 12px;
     max-width: 28rem;

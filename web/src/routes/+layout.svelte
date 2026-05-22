@@ -2,10 +2,12 @@
   import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
   import { getToken, setToken, api, type PendingRequest, type Device } from '$lib/api';
-  import { detect, type RuntimeInfo, type DesktopRuntimeInfo, wailsOpenConfigDirectory } from '$lib/runtime';
+  import { detect, type RuntimeInfo, type DesktopRuntimeInfo } from '$lib/runtime';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import Toasts from '$lib/components/Toasts.svelte';
+  import BleRelayController from '$lib/components/BleRelayController.svelte';
   import { addToast } from '$lib/toasts.svelte';
+  import { bleRelay } from '$lib/ble-relay.svelte';
 
   let { children } = $props();
 
@@ -14,25 +16,16 @@
 
   const navGroups: NavGroup[] = [
     {
-      label: 'Fleet',
+      label: null,
       items: [
-        { href: '/pending',  label: 'Pending', icon: 'inbox'   },
-        { href: '/devices',  label: 'Devices', icon: 'monitor' },
+        { href: '/pending', label: 'Fleet', icon: 'monitor' },
       ],
     },
     {
       label: 'Config',
       items: [
-        { href: '/allowlist', label: 'Allowlist',       icon: 'shield-check' },
-        { href: '/tokens',    label: 'Tokens',          icon: 'key'          },
-        { href: '/config',    label: 'Config / Secrets', icon: 'settings'    },
-      ],
-    },
-    {
-      label: 'Onboarding',
-      items: [
-        { href: '/onboard',     label: 'Onboard',   icon: 'user-plus', exact: true },
-        { href: '/onboard/ble', label: 'BLE Relay', icon: 'bluetooth' },
+        { href: '/allowlist', label: 'Allowlist',        icon: 'shield-check' },
+        { href: '/config',    label: 'Config / Secrets', icon: 'settings'     },
       ],
     },
     {
@@ -65,6 +58,7 @@
     return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name] ?? ''}</svg>`;
   }
 
+  let pendingCount = $state(0);
   let sidebarExpanded = $state(true);
   let needsLogin     = $state(false);
   let tokenInput     = $state('');
@@ -75,6 +69,10 @@
   const desktopRuntimeInfo = $derived(
     runtimeInfo?.mode === 'desktop' ? (runtimeInfo as DesktopRuntimeInfo) : null
   );
+
+  function handlePendingChanged(e: Event) {
+    pendingCount = (e as CustomEvent<{ count: number }>).detail.count;
+  }
 
   function handleAuthRequired() {
     if (runtimeInfo?.mode === 'desktop') {
@@ -100,7 +98,10 @@
       // Start SSE only after we know the token. In browser mode a saved
       // token is already in localStorage; in desktop mode setToken() above
       // just populated it. Either way getToken() is now valid.
-      if (getToken()) startSSE();
+      if (getToken()) {
+        startSSE();
+        api.pending().then(ps => { pendingCount = ps.length; }).catch(() => {});
+      }
     }).catch((err) => {
       console.warn('runtime detect failed', err);
       if (!getToken()) needsLogin = true;
@@ -108,9 +109,11 @@
       if (getToken()) startSSE();
     });
     window.addEventListener('ztp:auth-required', handleAuthRequired);
+    window.addEventListener('ztp:pending-changed', handlePendingChanged);
 
     return () => {
       window.removeEventListener('ztp:auth-required', handleAuthRequired);
+      window.removeEventListener('ztp:pending-changed', handlePendingChanged);
       sseStream?.close();
     };
   });
@@ -133,12 +136,6 @@
 
   function changeToken() { needsLogin = true; }
 
-  async function openConfigDir() {
-    const fn = wailsOpenConfigDirectory();
-    if (!fn) return;
-    try { await fn(); } catch (err) { console.warn('open config directory failed', err); }
-  }
-
   function isActive(href: string, exact?: boolean): boolean {
     if (exact) return $page.url.pathname === href;
     return $page.url.pathname.startsWith(href);
@@ -148,6 +145,7 @@
     sseStream?.close();
     sseStream = api.pendingStream(
       (p: PendingRequest) => {
+        pendingCount++;
         window.dispatchEvent(new CustomEvent('ztp:pending', { detail: p }));
         addToast({
           kind: 'pending',
@@ -158,12 +156,13 @@
         });
       },
       (d: Device) => {
+        if (pendingCount > 0) pendingCount--;
         window.dispatchEvent(new CustomEvent('ztp:enrolled', { detail: d }));
         addToast({
           kind: 'enrolled',
           title: 'Device enrolled',
           body: d.id,
-          href: '/devices',
+          href: '/pending',
           duration: 6000
         });
       }
@@ -215,37 +214,61 @@
             >
               {@html icon(item.icon)}
               <span class="nav-label">{item.label}</span>
+              {#if item.href === '/pending' && pendingCount > 0}
+                <span class="pending-badge" title="{pendingCount} device(s) awaiting approval">{pendingCount}</span>
+              {/if}
             </a>
           {/each}
         {/each}
       </nav>
 
-      <!-- Footer: mDNS indicator + token action + collapse toggle -->
+      <!-- Footer: BLE toggle + mDNS + token + collapse -->
       <div class="sidebar-footer">
+        <button
+          class="sidebar-btn ble-toggle-btn"
+          class:ble-on={bleRelay.enabled}
+          type="button"
+          onclick={() => {
+            if (bleRelay.enabled) {
+              bleRelay.enabled = false;
+              localStorage.setItem('ztp-ble-relay-enabled', 'false');
+              bleRelay.stop?.();
+            } else {
+              bleRelay.enabled = true;
+              localStorage.setItem('ztp-ble-relay-enabled', 'true');
+              bleRelay.start?.();
+            }
+          }}
+          title={bleRelay.enabled ? 'BLE relay on - click to turn off' : 'BLE relay off - click to turn on'}
+        >
+          {@html icon('bluetooth')}
+          <span class="nav-label">BLE</span>
+          <span class="ble-pill" class:on={bleRelay.enabled}></span>
+        </button>
         {#if runtimeInfo}
           <button
             class="sidebar-btn"
             class:mdns-on={runtimeInfo.mdns}
             type="button"
             aria-pressed={runtimeInfo.mdns}
-            title={runtimeInfo.mdns ? 'Disable mDNS (currently active — _ztp._tcp is being advertised on the LAN)' : 'Enable mDNS (currently inactive — devices cannot auto-discover this server)'}
-              tabindex="-1"
-              style="pointer-events: none; user-select: none; cursor: default;"
-              disabled
+            title={runtimeInfo.mdns ? 'mDNS active — _ztp._tcp is advertised on the LAN' : 'mDNS inactive — devices cannot auto-discover this server'}
+            tabindex="-1"
+            style="pointer-events: none; user-select: none; cursor: default;"
+            disabled
           >
             {@html icon(runtimeInfo.mdns ? 'online' : 'offline')}
             <span class="nav-label mdns-label">mDNS {runtimeInfo.mdns ? 'active' : 'inactive'}</span>
           </button>
         {/if}
         {#if runtimeInfo?.mode !== 'desktop'}
-        <button
-          class="sidebar-btn"
-          onclick={changeToken}
-          title={!sidebarExpanded ? 'Change admin token' : undefined}
-        >
-          {@html icon('lock')}
-          <span class="nav-label">Change token</span>
-        </button>
+          <button
+            class="sidebar-btn"
+            onclick={changeToken}
+            title={!sidebarExpanded ? 'Change admin token' : undefined}
+          >
+            {@html icon('lock')}
+            <span class="nav-label">Change token</span>
+          </button>
         {/if}
         <button
           class="sidebar-btn toggle-btn"
@@ -260,24 +283,6 @@
 
     <!-- ─── Page body ──────────────────────────────────────────────── -->
     <div class="page-body">
-      {#if desktopRuntimeInfo?.configDir}
-        <section class="desktop-config-notice">
-          <p>
-            Config: <code>{desktopRuntimeInfo.configDir}</code>
-            <button class="open-config-btn" onclick={openConfigDir}>Open</button>
-          </p>
-          {#if desktopRuntimeInfo.configPath}
-            <p>Config file: <code>{desktopRuntimeInfo.configPath}</code></p>
-          {/if}
-          {#if desktopRuntimeInfo.firstRun}
-            <p class="banner-title">First run — generated files are ready.</p>
-            {#if desktopRuntimeInfo.adminTokenFile}<p>Token: <code>{desktopRuntimeInfo.adminTokenFile}</code></p>{/if}
-            {#if desktopRuntimeInfo.signingKeyFile}<p>Signing key: <code>{desktopRuntimeInfo.signingKeyFile}</code></p>{/if}
-            {#if desktopRuntimeInfo.ageKeyFile}<p>Age key: <code>{desktopRuntimeInfo.ageKeyFile}</code></p>{/if}
-            {#if desktopRuntimeInfo.profilesDir}<p>Profiles: <code>{desktopRuntimeInfo.profilesDir}</code></p>{/if}
-          {/if}
-        </section>
-      {/if}
       <main>{@render children()}</main>
     </div>
   </div>
@@ -285,8 +290,28 @@
 
 <ConfirmDialog />
 <Toasts />
+<BleRelayController />
 
 <style>
+  /* ── Cumulocity-branded CSS custom properties ───────────────────── */
+  :global(:root) {
+    --bg:          #212121;
+    --surface:     #2a2a2a;
+    --surface-2:   #1e1e1e;
+    --hover:       #333333;
+    --border:      #3d3d3d;
+    --accent:      #ffbe00;
+    --accent-dim:  rgba(255, 190, 0, 0.12);
+    --accent-dim2: rgba(255, 190, 0, 0.2);
+    --text:        #f0f0f0;
+    --text-muted:  #999999;
+    --text-dim:    #777777;
+    --success:     #3fb950;
+    --danger:      #f85149;
+    --warning:     #e3b341;
+    --code-bg:     #1a1a1a;
+  }
+
   /* ── Reset / globals ─────────────────────────────────────────────── */
   :global(html, body) {
     margin: 0;
@@ -295,8 +320,8 @@
   }
   :global(body) {
     font-family: system-ui, -apple-system, sans-serif;
-    background: #0d1117;
-    color: #e6edf3;
+    background: var(--bg);
+    color: var(--text);
   }
 
   /* ── App shell: sidebar + page body side by side ─────────────────── */
@@ -310,14 +335,13 @@
   .sidebar {
     flex-shrink: 0;
     width: 210px;
-    background: #161b22;
-    border-right: 1px solid #30363d;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
     display: flex;
     flex-direction: column;
-    overflow: hidden;           /* clips label text when narrow */
-    white-space: nowrap;        /* prevents label text wrapping */
+    overflow: hidden;
+    white-space: nowrap;
     transition: width 0.2s ease;
-    /* Hardware-accelerated so it doesn't jank during page repaints */
     will-change: width;
   }
   .sidebar.collapsed { width: 52px; }
@@ -328,7 +352,7 @@
     align-items: center;
     gap: 0.6rem;
     padding: 0.9rem 0.85rem 0.8rem;
-    border-bottom: 1px solid #30363d;
+    border-bottom: 1px solid var(--border);
     min-height: 52px;
     box-sizing: border-box;
   }
@@ -337,15 +361,15 @@
     font-size: 0.7rem;
     font-weight: 700;
     letter-spacing: 0.05em;
-    background: #1f6feb;
-    color: #fff;
+    background: var(--accent);
+    color: #000;
     border-radius: 4px;
     padding: 0.2rem 0.38rem;
   }
   .brand-name {
     font-size: 0.9rem;
     font-weight: 600;
-    color: #e6edf3;
+    color: var(--text);
   }
 
   /* Nav area */
@@ -358,20 +382,20 @@
     flex-direction: column;
     gap: 1px;
     scrollbar-width: thin;
-    scrollbar-color: #30363d transparent;
+    scrollbar-color: var(--border) transparent;
   }
   .group-label {
     font-size: 0.68rem;
     font-weight: 600;
     letter-spacing: 0.07em;
     text-transform: uppercase;
-    color: #6e7681;
+    color: var(--text-dim);
     padding: 0.7rem 0.55rem 0.2rem;
     display: block;
   }
   .group-sep {
     border: none;
-    border-top: 1px solid #21262d;
+    border-top: 1px solid var(--hover);
     margin: 0.4rem 0.15rem;
   }
   .sidebar-nav a {
@@ -380,18 +404,33 @@
     gap: 0.6rem;
     padding: 0.45rem 0.55rem;
     border-radius: 5px;
-    color: #8b949e;
+    color: var(--text-muted);
     text-decoration: none;
     font-size: 0.875rem;
     transition: background 0.1s, color 0.1s;
   }
-  .sidebar-nav a:hover             { background: #21262d; color: #e6edf3; }
-  .sidebar-nav a.active            { background: rgba(31,111,235,0.15); color: #58a6ff; }
-  .sidebar-nav a.active:hover      { background: rgba(31,111,235,0.22); }
+  .sidebar-nav a:hover             { background: var(--hover); color: var(--text); }
+  .sidebar-nav a.active            { background: var(--accent-dim); color: var(--accent); }
+  .sidebar-nav a.active:hover      { background: var(--accent-dim2); }
+
+  /* Pending badge on nav item */
+  .pending-badge {
+    margin-left: auto;
+    flex-shrink: 0;
+    background: var(--accent);
+    color: #000;
+    font-size: 0.68rem;
+    font-weight: 700;
+    line-height: 1;
+    padding: 0.15rem 0.4rem;
+    border-radius: 10px;
+    min-width: 1.2em;
+    text-align: center;
+  }
 
   /* Footer */
   .sidebar-footer {
-    border-top: 1px solid #30363d;
+    border-top: 1px solid var(--border);
     padding: 0.35rem;
     display: flex;
     flex-direction: column;
@@ -405,7 +444,7 @@
     border-radius: 5px;
     background: none;
     border: none;
-    color: #8b949e;
+    color: var(--text-muted);
     cursor: pointer;
     font: inherit;
     font-size: 0.875rem;
@@ -414,56 +453,56 @@
     white-space: nowrap;
     transition: background 0.1s, color 0.1s;
   }
-  .sidebar-btn:hover { background: #21262d; color: #e6edf3; }
+  .sidebar-btn:hover { background: var(--hover); color: var(--text); }
 
-  /* mDNS status indicator */
-  .mdns-indicator {
-    display: flex;
-    align-items: baseline;
-    gap: 0.6rem;
-    padding: 0.45rem 0.55rem;
-    font-size: 0.875rem;
-    color: #6e7681;
-    white-space: nowrap;
-  }
-  .mdns-indicator svg {
+  /* BLE toggle */
+  .ble-toggle-btn { gap: 0.6rem; }
+  .ble-pill {
+    display: inline-block;
+    width: 30px;
+    height: 16px;
+    border-radius: 8px;
+    background: var(--hover);
+    border: 1px solid var(--border);
+    position: relative;
+    margin-left: auto;
     flex-shrink: 0;
-    width: 1.25em;
-    height: 1.25em;
-    vertical-align: middle;
-    margin-top: -1px;
-    margin-bottom: -1px;
+    transition: background 0.2s, border-color 0.2s;
   }
-  .mdns-label {
-    display: block;
-    line-height: 1.2;
-  }
-  .mdns-indicator.mdns-on { color: #8b949e; }
-  .mdns-led {
-    flex-shrink: 0;
-    width: 8px;
-    height: 8px;
+  .ble-pill::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 10px;
+    height: 10px;
     border-radius: 50%;
-    background: #3d4450;
-    box-shadow: none;
-    transition: background 0.3s, box-shadow 0.3s;
+    background: var(--text-dim);
+    transition: transform 0.2s, background 0.2s;
   }
-  .mdns-on .mdns-led {
-    background: #2ea043;
-    box-shadow: 0 0 5px #2ea043aa;
+  .ble-pill.on {
+    background: var(--success);
+    border-color: var(--success);
   }
-  .mdns-label { font-size: 0.875rem; }
+  .ble-pill.on::after {
+    transform: translateX(14px);
+    background: #fff;
+  }
+  .ble-toggle-btn.ble-on { color: var(--success); }
+  .ble-toggle-btn.ble-on:hover { color: var(--success); background: rgba(63,185,80,0.1); }
+  .sidebar.collapsed .ble-pill { display: none; }
 
-  /* Hide labels when sidebar is collapsed */
+  /* mDNS status */
+  .mdns-label { display: block; line-height: 1.2; }
+  .mdns-indicator { color: var(--text-dim); }
+  .mdns-on { color: var(--text-muted); }
+
+  /* Hide labels when collapsed */
   .sidebar.collapsed .nav-label    { display: none; }
   .sidebar.collapsed .group-label  { display: none; }
   .sidebar.collapsed .brand-name   { display: none; }
   .sidebar.collapsed .mdns-label   { display: none; }
-  .sidebar.collapsed .mdns-indicator {
-    justify-content: center;
-    padding-left: 0;
-    padding-right: 0;
-  }
+  .sidebar.collapsed .pending-badge { display: none; }
 
   /* ── Page body ──────────────────────────────────────────────────── */
   .page-body {
@@ -475,50 +514,17 @@
   }
   main { padding: 1.5rem; flex: 1; }
 
-  /* Desktop config notice */
-  .desktop-config-notice {
-    border-bottom: 1px solid #30363d;
-    background: #0f151d;
-    padding: 0.5rem 1.25rem;
-  }
-  .desktop-config-notice p {
-    margin: 0.15rem 0;
-    color: #b7c0c8;
-    font-size: 0.82rem;
-    line-height: 1.35;
-  }
-  .desktop-config-notice .banner-title {
-    margin-top: 0.4rem;
-    color: #e6edf3;
-    font-weight: 600;
-  }
-  .desktop-config-notice code {
-    color: #d2d9e0;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  }
-  .open-config-btn {
-    margin-left: 0.4rem;
-    background: #21262d;
-    border: 1px solid #30363d;
-    color: #c9d1d9;
-    border-radius: 4px;
-    padding: 0.1rem 0.4rem;
-    font-size: 0.72rem;
-    cursor: pointer;
-  }
-  .open-config-btn:hover { background: #30363d; }
-
   /* ── Login overlay ──────────────────────────────────────────────── */
   .login-overlay {
     min-height: 100vh;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: #0d1117;
+    background: var(--bg);
   }
   .login-box {
-    background: #161b22;
-    border: 1px solid #30363d;
+    background: var(--surface);
+    border: 1px solid var(--border);
     border-radius: 8px;
     padding: 2rem;
     width: 100%;
@@ -528,28 +534,29 @@
     gap: 0.75rem;
   }
   .login-box h2    { margin: 0 0 0.5rem; font-size: 1.25rem; }
-  .login-box p     { margin: 0; color: #8b949e; font-size: 0.9rem; }
-  .login-box label { font-size: 0.9rem; color: #8b949e; }
+  .login-box p     { margin: 0; color: var(--text-muted); font-size: 0.9rem; }
+  .login-box label { font-size: 0.9rem; color: var(--text-muted); }
   .login-box input {
     padding: 0.5rem 0.75rem;
-    border: 1px solid #30363d;
+    border: 1px solid var(--border);
     border-radius: 6px;
-    background: #0d1117;
-    color: #e6edf3;
+    background: var(--bg);
+    color: var(--text);
     font-size: 1rem;
     font-family: monospace;
   }
-  .login-box input:focus { outline: 2px solid #1f6feb; border-color: transparent; }
+  .login-box input:focus { outline: 2px solid var(--accent); border-color: transparent; }
   .login-box button {
     padding: 0.6rem 1.25rem;
-    background: #1f6feb;
-    color: #fff;
+    background: var(--accent);
+    color: #000;
     border: none;
     border-radius: 6px;
     font-size: 1rem;
+    font-weight: 600;
     cursor: pointer;
     align-self: flex-end;
   }
-  .login-box button:hover { background: #388bfd; }
-  .err { color: #f85149; margin: 0; font-size: 0.85rem; }
+  .login-box button:hover { background: #ffd040; }
+  .err { color: var(--danger); margin: 0; font-size: 0.85rem; }
 </style>
