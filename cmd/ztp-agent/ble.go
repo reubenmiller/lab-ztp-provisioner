@@ -104,12 +104,15 @@ func runBLEPeripheral(ctx context.Context, cfg agent.Config, logger *slog.Logger
 	// embedded in the most recent envelope. Apply needs to use the SAME key to
 	// open any sealed modules in the bundle, so we keep them paired under a
 	// single mutex and only swap when a fresh envelope is built.
+	// stateMu guards ephPriv, applyErr, and applyDone. applyErr and applyDone
+	// are written inside the periph.Serve callback goroutine and read in the
+	// outer goroutine after Serve returns; they must be protected together.
 	var (
-		stateMu sync.Mutex
-		ephPriv [32]byte
+		stateMu   sync.Mutex
+		ephPriv   [32]byte
+		applyErr  error
+		applyDone bool // set to true only after a successful ApplyEnrollResponse
 	)
-
-	var applyErr error
 
 	serveErr := periph.Serve(ctx, func(req []byte) ([]byte, error) {
 		if len(req) == 0 {
@@ -158,7 +161,12 @@ func runBLEPeripheral(ctx context.Context, cfg agent.Config, logger *slog.Logger
 		eph := ephPriv
 		stateMu.Unlock()
 		err := agent.ApplyEnrollResponse(ctx, cfg, eph, req)
+		stateMu.Lock()
 		applyErr = err
+		if err == nil {
+			applyDone = true // enrollment completed successfully
+		}
+		stateMu.Unlock()
 		if err != nil {
 			logger.Error("BLE: apply failed", "err", err)
 		}
@@ -169,11 +177,27 @@ func runBLEPeripheral(ctx context.Context, cfg agent.Config, logger *slog.Logger
 
 	// Prefer the application-level error over the context-cancellation error
 	// so the caller gets a meaningful message.
-	if applyErr != nil {
-		return applyErr
+	stateMu.Lock()
+	done := applyDone
+	appErr := applyErr
+	stateMu.Unlock()
+
+	if appErr != nil {
+		return appErr
 	}
-	if serveErr != nil && ctx.Err() == nil {
-		// Unexpected serve error (not our own cancel).
+	if done {
+		// We cancelled periph.Serve ourselves after a successful apply.
+		return nil
+	}
+	// Not done + no apply error means the context was cancelled externally
+	// (e.g. another transport won the race). Propagate the cancellation so
+	// the caller's drain loop classifies this as an expected loser cancel
+	// rather than a false success.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if serveErr != nil {
+		// Unexpected serve error that is not a cancellation.
 		return serveErr
 	}
 	return nil

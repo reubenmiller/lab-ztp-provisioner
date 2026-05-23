@@ -32,7 +32,11 @@ func (k *KnownKeypair) Verify(ctx context.Context, req *protocol.EnrollRequest) 
 	if d.PublicKey == "" || d.PublicKey != req.PublicKey {
 		// Device exists but the key changed — that's suspicious. Reject so an
 		// operator notices and either re-approves or investigates.
-		return Result{Decision: Reject, Reason: "public key does not match recorded key for device"}, nil
+		return Result{
+			Decision:   Reject,
+			Reason:     "public key does not match recorded key for device",
+			ReasonCode: protocol.ReasonCodeKeyMismatch,
+		}, nil
 	}
 	return Result{Decision: Trust, Reason: "known device key"}, nil
 }

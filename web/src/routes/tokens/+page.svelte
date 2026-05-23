@@ -98,6 +98,7 @@
   </p>
 {/if}
 
+<div class="table-wrap">
 <table>
   <thead><tr><th>ID</th><th>Bound device</th><th>Profile</th><th>Uses</th><th>Expires</th><th>Created</th><th></th></tr></thead>
   <tbody>
@@ -114,6 +115,24 @@
     {/each}
   </tbody>
 </table>
+</div>
+<div class="card-list">
+  {#each items as t (t.id)}
+    <div class="tok-card">
+      <div class="tok-card-id"><code>{t.id}</code></div>
+      <div class="tok-card-grid">
+        <div class="tok-field"><span class="tok-label">Bound device</span><span>{t.device_id ?? '—'}</span></div>
+        <div class="tok-field"><span class="tok-label">Profile</span><span>{t.profile || '—'}</span></div>
+        <div class="tok-field"><span class="tok-label">Uses</span><span>{t.uses}{t.max_uses > 0 ? `/${t.max_uses}` : ''}</span></div>
+        <div class="tok-field"><span class="tok-label">Expires</span><span>{t.expires_at ? new Date(t.expires_at).toLocaleString() : '—'}</span></div>
+        <div class="tok-field tok-full"><span class="tok-label">Created</span><span>{new Date(t.created_at).toLocaleString()}</span></div>
+      </div>
+      <div class="tok-card-footer">
+        <button class="danger" onclick={() => revoke(t.id)}>Revoke</button>
+      </div>
+    </div>
+  {/each}
+</div>
 
 <style>
   h2 small { color: #8b949e; font-weight: normal; margin-left: 0.5rem; }
@@ -143,4 +162,58 @@
   button.bad { background: #da3633; color: white; }
   code { background: #161b22; padding: 0.1rem 0.3rem; border-radius: 3px; }
   .secret { background: #1f2a37; padding: 0.5rem 1rem; border-radius: 4px; border-left: 3px solid #d29922; }
+
+  /* Card list (mobile) */
+  .card-list { display: none; }
+  @media (max-width: 900px) {
+    .table-wrap { display: none; }
+    .card-list  { display: flex; flex-direction: column; gap: 0.6rem; }
+  }
+  .tok-card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .tok-card-id {
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
+    padding: 0.55rem 0.8rem;
+    font-size: 0.9rem;
+  }
+  .tok-card-grid { display: grid; grid-template-columns: 1fr 1fr; }
+  .tok-field {
+    display: flex;
+    flex-direction: column;
+    padding: 0.35rem 0.75rem 0.4rem;
+    font-size: 0.875rem;
+    border-bottom: 1px solid var(--border);
+    min-width: 0;
+  }
+  .tok-full { grid-column: 1 / -1; }
+  .tok-label {
+    font-size: 0.6rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--text-dim);
+    margin-bottom: 0.15rem;
+  }
+  .tok-card-footer {
+    display: flex;
+    justify-content: flex-end;
+    padding: 0.45rem 0.75rem;
+    background: var(--surface-2);
+    border-top: 1px solid var(--border);
+  }
+  .tok-card-footer button.danger {
+    padding: 0.3rem 0.75rem;
+    background: var(--danger);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.875rem;
+  }
+  .tok-card-footer button.danger:hover { filter: brightness(1.1); }
 </style>

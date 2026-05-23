@@ -42,6 +42,13 @@
       {#if t.body}
         <p class="toast-body">{t.body}</p>
       {/if}
+      {#if t.copyText}
+        <button
+          class="toast-copy"
+          onclick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(t.copyText!).then(() => removeToast(t.id)); }}
+          type="button"
+        >Copy command</button>
+      {/if}
     </div>
   {/each}
 </div>
@@ -114,6 +121,19 @@
     font-size: 0.78rem;
     color: #8b949e;
   }
+
+  .toast-copy {
+    display: block;
+    margin: 0.4rem 0 0 1.3rem;
+    background: #21262d;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    color: #58a6ff;
+    cursor: pointer;
+    font-size: 0.75rem;
+    padding: 0.2rem 0.6rem;
+  }
+  .toast-copy:hover { background: #30363d; }
 
   @keyframes slide-in {
     from { opacity: 0; transform: translateX(1rem); }

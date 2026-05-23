@@ -52,3 +52,11 @@ mdns:
 # bind-mounted into the server container as /etc/ztp/profiles.d/default.yaml.
 profiles_dir: "/etc/ztp/profiles.d"
 default_profile: "default"
+
+# SSH known_hosts cleanup — disabled in Docker deployments.
+# The server process runs as a non-root user inside the container and cannot
+# reach the host operator's ~/.ssh/known_hosts. Enable this only in local/
+# native (non-containerised) deployments by setting enabled: true.
+# known_hosts_cleanup:
+#   enabled: false
+#   file: ~/.ssh/known_hosts

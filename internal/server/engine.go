@@ -42,6 +42,9 @@ type EngineConfig struct {
 	Logger       *slog.Logger
 	OnPending    func(p *store.PendingRequest) // optional notifier (SSE push)
 	OnEnrolled   func(d *store.Device)         // optional notifier fired on every successful enrollment
+	// OnKeyMismatch is called when an enrollment is rejected with a key-mismatch
+	// reason so the SSE stream can push a dedicated event to the admin UI.
+	OnKeyMismatch func(deviceID, reason string) // optional
 }
 
 // Engine processes EnrollRequests. Safe for concurrent use; the underlying
@@ -112,14 +115,18 @@ func (e *Engine) Enroll(ctx context.Context, signedRequest *protocol.SignedEnvel
 
 	switch result.Decision {
 	case trust.Reject:
-		logger.Info("enrollment rejected", "reason", result.Reason)
+		logger.Info("enrollment rejected", "reason", result.Reason, "reason_code", result.ReasonCode)
 		_ = e.cfg.Store.AppendAudit(ctx, store.AuditEntry{
 			Actor: "system", Action: "enroll.reject", DeviceID: req.DeviceID, Details: result.Reason,
 		})
+		if result.ReasonCode == protocol.ReasonCodeKeyMismatch && e.cfg.OnKeyMismatch != nil {
+			e.cfg.OnKeyMismatch(req.DeviceID, result.Reason)
+		}
 		return &protocol.EnrollResponse{
 			ProtocolVersion: protocol.Version,
 			Status:          protocol.StatusRejected,
 			Reason:          result.Reason,
+			ReasonCode:      result.ReasonCode,
 			ServerTime:      &now,
 		}, nil
 

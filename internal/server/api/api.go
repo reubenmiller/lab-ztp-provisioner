@@ -14,7 +14,9 @@ import (
 	"filippo.io/age"
 
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server"
+	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server/config"
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server/store"
+	"github.com/thin-edge/tedge-zerotouch-provisioning/pkg/knownhosts"
 	"github.com/thin-edge/tedge-zerotouch-provisioning/pkg/protocol"
 )
 
@@ -70,6 +72,12 @@ type Server struct {
 	// successfully. Surfaced via GET /v1/runtime-config so the SPA can
 	// show a status indicator.
 	MDNSActive bool
+
+	// KnownHostsCleanup, when Enabled, removes the deleted device's hostname
+	// from the operator's SSH known_hosts file after a successful device
+	// deletion. Useful for local/native server deployments where the server
+	// process has access to the operator's home directory.
+	KnownHostsCleanup config.KnownHostsCleanupConfig
 }
 
 // Routes returns an http.Handler with all routes registered.
@@ -97,6 +105,7 @@ func (s *Server) Routes() http.Handler {
 	admin.HandleFunc("POST /v1/admin/pending/{id}/approve", s.handleApprovePending)
 	admin.HandleFunc("POST /v1/admin/pending/{id}/reject", s.handleRejectPending)
 	admin.HandleFunc("GET /v1/admin/devices", s.handleListDevices)
+	admin.HandleFunc("GET /v1/admin/devices/{id}", s.handleGetDevice)
 	admin.HandleFunc("PATCH /v1/admin/devices/{id}", s.handlePatchDevice)
 	admin.HandleFunc("DELETE /v1/admin/devices/{id}", s.handleDeleteDevice)
 	admin.HandleFunc("GET /v1/admin/allowlist", s.handleListAllowlist)
@@ -402,9 +411,20 @@ func (s *Server) handleListDevices(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, list)
 }
 
+func (s *Server) handleGetDevice(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	dev, err := s.Store.GetDevice(r.Context(), id)
+	if err != nil {
+		http.Error(w, "device not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, dev)
+}
+
 func (s *Server) handleDeleteDevice(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, err := s.Store.GetDevice(r.Context(), id); err != nil {
+	dev, err := s.Store.GetDevice(r.Context(), id)
+	if err != nil {
 		http.Error(w, "device not found", http.StatusNotFound)
 		return
 	}
@@ -415,6 +435,13 @@ func (s *Server) handleDeleteDevice(w http.ResponseWriter, r *http.Request) {
 	_ = s.Store.AppendAudit(r.Context(), store.AuditEntry{
 		Actor: "operator", Action: "device.delete", DeviceID: id,
 	})
+	if s.KnownHostsCleanup.Enabled && dev.Facts.Hostname != "" {
+		if err := knownhosts.Remove(s.KnownHostsCleanup.File, dev.Facts.Hostname); err != nil {
+			s.Logger.Warn("known_hosts cleanup failed", "hostname", dev.Facts.Hostname, "err", err)
+		} else {
+			s.Logger.Info("removed known_hosts entry", "hostname", dev.Facts.Hostname)
+		}
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

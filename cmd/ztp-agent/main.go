@@ -749,10 +749,14 @@ func runMultiTransport(
 	}
 
 	switch {
+	case terminalErr != nil:
+		// A definitive server rejection (e.g. key mismatch, bad token) always
+		// wins over a concurrent success signal. Bug defence: if Bug 1 were
+		// ever re-introduced, a false-success from the BLE worker would not
+		// mask the terminal error that actually describes what happened.
+		return terminalErr
 	case success:
 		return nil
-	case terminalErr != nil:
-		return terminalErr
 	case lastUnreachableErr != nil:
 		return lastUnreachableErr
 	default:
