@@ -184,6 +184,18 @@ func Run(ctx context.Context, cfg Config) error {
 				clockAdjusted = true
 				continue
 			}
+			// Emit a specific, actionable message for the most common
+			// post-factory-reset failure so operators know exactly what
+			// to do without consulting logs on a server they may not
+			// have direct access to.
+			if strings.Contains(resp.Reason, "public key does not match") {
+				cfg.Logger.Warn("enrollment rejected: device key mismatch — "+
+					"this device was previously enrolled with a different key "+
+					"(e.g. after a factory reset). "+
+					"An administrator must remove the old device record on the ZTP server "+
+					"before this device can re-enroll.",
+					"reason", resp.Reason, "reason_code", resp.ReasonCode)
+			}
 			return ErrEnrollRejected{Reason: resp.Reason}
 		case protocol.StatusPending:
 			cfg.Logger.Info("waiting for manual approval", "reason", resp.Reason)

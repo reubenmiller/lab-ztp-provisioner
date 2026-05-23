@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { api, type PendingRequest, type Device, type ProfileSummary } from '$lib/api';
+  import { api, type PendingRequest, type Device, type ProfileSummary, type KeyMismatchEvent } from '$lib/api';
   import { confirmDialog } from '$lib/confirm.svelte';
   import { bleRelay } from '$lib/ble-relay.svelte';
   import { addToast } from '$lib/toasts.svelte';
@@ -13,6 +13,12 @@
   let devices = $state<Device[]>([]);
   let deleting = $state<string | null>(null);
   let menuOpen = $state<string | null>(null);
+
+  // ── Key-mismatch (factory-reset devices trying to re-enroll) ─────────────
+  // Accumulated in-memory from the SSE stream; dismissed individually or on
+  // "Remove old record" which lets the device re-enroll via TOFU.
+  let keyMismatches = $state<KeyMismatchEvent[]>([]);
+  let removingKeyMismatch = $state<string | null>(null);
 
   // Allowlist modal
   let allowModal = $state<Device | null>(null);
@@ -124,20 +130,92 @@
     if (!(e.target as HTMLElement).closest('.menu-wrap')) menuOpen = null;
   }
 
+  // ── Key-mismatch actions ──────────────────────────────────────────────────
+  async function removeKeyMismatchRecord(deviceId: string) {
+    const ok = await confirmDialog({
+      title: 'Remove old device record',
+      message: `Delete the old enrollment record for "${deviceId}"?\n\nThe device will be treated as unknown on its next attempt and can re-enroll via the normal approval flow.`,
+      confirmLabel: 'Remove record',
+      danger: false,
+    });
+    if (!ok) return;
+    removingKeyMismatch = deviceId;
+    try {
+      await api.deleteDevice(deviceId);
+      keyMismatches = keyMismatches.filter(e => e.device_id !== deviceId);
+    } catch (e: any) {
+      err = e.message;
+    } finally {
+      removingKeyMismatch = null;
+    }
+  }
+
+  function dismissKeyMismatch(deviceId: string) {
+    keyMismatches = keyMismatches.filter(e => e.device_id !== deviceId);
+  }
+
+  let sseSource: EventSource | null = null;
+
   onMount(() => {
     loadAll();
     window.addEventListener('ztp:pending', loadAll);
     window.addEventListener('ztp:enrolled', loadAll);
+    sseSource = api.pendingStream(
+      () => loadAll(),
+      () => loadAll(),
+      (ev) => {
+        // Deduplicate by device_id — keep only the latest event per device.
+        keyMismatches = [
+          ...keyMismatches.filter(e => e.device_id !== ev.device_id),
+          ev,
+        ];
+      },
+    );
   });
   onDestroy(() => {
     window.removeEventListener('ztp:pending', loadAll);
     window.removeEventListener('ztp:enrolled', loadAll);
+    sseSource?.close();
   });
 </script>
 
 <svelte:window onclick={closeMenuOnOutsideClick} />
 
 {#if err}<p class="err">{err}</p>{/if}
+
+<!-- ── Key-mismatch alerts ─────────────────────────────────────────────── -->
+{#if keyMismatches.length > 0}
+<section class="card key-mismatch-section">
+  <h3>⚠ Key mismatch <small>{keyMismatches.length}</small></h3>
+  <p class="km-description">
+    These devices were rejected because their public key no longer matches the enrollment record —
+    typically caused by a factory reset. Remove the old record so the device can re-enroll.
+  </p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Device ID</th><th>Reason</th><th></th></tr>
+      </thead>
+      <tbody>
+        {#each keyMismatches as km (km.device_id)}
+          <tr>
+            <td>{km.device_id}</td>
+            <td class="km-reason">{km.reason}</td>
+            <td class="action-btns">
+              <button
+                class="btn-ok"
+                disabled={removingKeyMismatch === km.device_id}
+                onclick={() => removeKeyMismatchRecord(km.device_id)}
+              >{removingKeyMismatch === km.device_id ? '…' : 'Remove old record'}</button>
+              <button class="btn-neutral" onclick={() => dismissKeyMismatch(km.device_id)}>Dismiss</button>
+            </td>
+          </tr>
+        {/each}
+      </tbody>
+    </table>
+  </div>
+</section>
+{/if}
 
 <!-- ── Pending approvals ───────────────────────────────────────────────── -->
 <section class="card">
@@ -430,6 +508,12 @@
   .action-btns .btn-ok:active, .action-btns .btn-bad:active { opacity: 0.75; }
   .btn-ok  { background: var(--success); color: #fff; }
   .btn-bad { background: var(--danger);  color: #fff; }
+  .btn-neutral { background: var(--bg); color: var(--text); border: 1px solid var(--border); }
+
+  /* Key-mismatch section */
+  .key-mismatch-section { border-left: 4px solid var(--warning, #f0a500); }
+  .km-description { font-size: 0.85rem; color: var(--text-muted, #888); margin: 0.25rem 0 0.75rem; }
+  .km-reason { font-size: 0.85rem; color: var(--text-muted, #888); }
 
   /* Profile select */
   select {

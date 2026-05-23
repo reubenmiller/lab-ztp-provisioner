@@ -82,6 +82,22 @@ func (h *Hub) NotifyEnrolled(d *store.Device) {
 	h.broadcast(sseEvent{name: "enrolled", data: b})
 }
 
+// NotifyKeyMismatch is the function passed to EngineConfig.OnKeyMismatch.
+// It broadcasts a "key_mismatch" SSE event so the admin UI can alert the
+// operator that a formerly-enrolled device is trying to re-enroll with a
+// new key (e.g. after a factory reset) and needs its old record removed.
+func (h *Hub) NotifyKeyMismatch(deviceID, reason string) {
+	type keyMismatchEvent struct {
+		DeviceID string `json:"device_id"`
+		Reason   string `json:"reason"`
+	}
+	b, err := json.Marshal(keyMismatchEvent{DeviceID: deviceID, Reason: reason})
+	if err != nil {
+		return
+	}
+	h.broadcast(sseEvent{name: "key_mismatch", data: b})
+}
+
 // ServeWS implements GET /v1/admin/pending/stream as an SSE stream despite
 // the name; the route name is preserved to match the original plan but the
 // transport is plain SSE which works without a websocket library.

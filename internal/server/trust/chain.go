@@ -28,10 +28,11 @@ const (
 
 // Result is what a Verifier produces.
 type Result struct {
-	Decision Decision
-	Reason   string // free-form, surfaced in audit logs and (where safe) to clients
-	Verifier string // populated by Chain
-	Profile  string // optional profile hint (allowlist entry / token / etc.)
+	Decision   Decision
+	Reason     string // free-form, surfaced in audit logs and (where safe) to clients
+	ReasonCode string // machine-readable companion; set to a protocol.ReasonCode* constant when applicable
+	Verifier   string // populated by Chain
+	Profile    string // optional profile hint (allowlist entry / token / etc.)
 }
 
 // Verifier inspects an EnrollRequest and decides what to do with it.

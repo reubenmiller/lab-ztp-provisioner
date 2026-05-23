@@ -73,14 +73,28 @@ const (
 	StatusRejected EnrollStatus = "rejected"
 )
 
+// ReasonCode constants provide machine-readable rejection causes. They are
+// emitted in EnrollResponse.ReasonCode (omitempty) alongside the human-readable
+// Reason string. Agents and clients should prefer these over string-matching.
+const (
+	// ReasonCodeKeyMismatch is set when a device is rejected because its
+	// public key differs from the one recorded for that device ID (e.g. after
+	// a factory reset that regenerated the identity key).
+	ReasonCodeKeyMismatch = "key_mismatch"
+)
+
 // EnrollResponse is the server's reply. When Status == StatusAccepted the
 // Bundle field contains a signed (and optionally encrypted) ProvisioningBundle.
 type EnrollResponse struct {
-	ProtocolVersion string          `json:"protocol_version"`
-	Status          EnrollStatus    `json:"status"`
-	Reason          string          `json:"reason,omitempty"`
-	RetryAfter      int             `json:"retry_after,omitempty"` // seconds; for "pending"
-	Bundle          *SignedEnvelope `json:"bundle,omitempty"`
+	ProtocolVersion string       `json:"protocol_version"`
+	Status          EnrollStatus `json:"status"`
+	Reason          string       `json:"reason,omitempty"`
+	// ReasonCode is a machine-readable companion to Reason. Agents and admin
+	// clients should match on this rather than string-matching Reason.
+	// Only set on StatusRejected responses; omitted otherwise.
+	ReasonCode string          `json:"reason_code,omitempty"`
+	RetryAfter int             `json:"retry_after,omitempty"` // seconds; for "pending"
+	Bundle     *SignedEnvelope `json:"bundle,omitempty"`
 	// EncryptedBundle, if present, is an X25519+ChaCha20-Poly1305 ciphertext
 	// over the SignedEnvelope JSON. Used when transport is untrusted (BLE relay).
 	EncryptedBundle *EncryptedPayload `json:"encrypted_bundle,omitempty"`

@@ -128,15 +128,16 @@ func Start(ctx context.Context, opts Options) (*Handle, error) {
 
 	hub := api.NewHub()
 	engine, err := server.NewEngine(server.EngineConfig{
-		Store:        st,
-		Verifiers:    verifiers,
-		Resolver:     resolver,
-		SigningKey:   signingKey,
-		SigningKeyID: cfg.SigningKeyID,
-		ClockSkew:    cfg.ClockSkew,
-		Logger:       logger,
-		OnPending:    hub.Notify,
-		OnEnrolled:   hub.NotifyEnrolled,
+		Store:         st,
+		Verifiers:     verifiers,
+		Resolver:      resolver,
+		SigningKey:    signingKey,
+		SigningKeyID:  cfg.SigningKeyID,
+		ClockSkew:     cfg.ClockSkew,
+		Logger:        logger,
+		OnPending:     hub.Notify,
+		OnEnrolled:    hub.NotifyEnrolled,
+		OnKeyMismatch: hub.NotifyKeyMismatch,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: %w", err)
