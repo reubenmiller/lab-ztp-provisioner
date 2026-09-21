@@ -182,7 +182,11 @@ func (a *App) WriteProfileFile(name, content string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(content), 0o644)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return err
+	}
+	a.reloadProfiles()
+	return nil
 }
 
 func (a *App) DeleteProfileFile(name string) error {
@@ -193,7 +197,21 @@ func (a *App) DeleteProfileFile(name string) error {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
+	a.reloadProfiles()
 	return nil
+}
+
+// reloadProfiles makes the engine pick up a profile file the SPA just
+// wrote or deleted, mirroring the server-mode config-file handlers.
+// Without it the new profile stays invisible (e.g. absent from the
+// pending-approval profile picker) until the app restarts. A failed
+// reload is logged by Handle.Reload and keeps the previous set; the
+// file itself was saved, so it is not reported as a save failure.
+func (a *App) reloadProfiles() {
+	if a.handle == nil {
+		return
+	}
+	_ = a.handle.Reload(context.Background())
 }
 
 func (a *App) RevealSealedProfile(content string) (string, error) {
