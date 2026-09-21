@@ -21,6 +21,30 @@ func TestMarshalEnrollText(t *testing.T) {
 	}
 }
 
+// The JSON bundle is dead weight next to a manifest for a text reader, and a
+// BLE device pays for every byte of it; it is dropped then, and only then.
+func TestMarshalEnrollText_BundleOnlyWithoutManifest(t *testing.T) {
+	bundle := &SignedEnvelope{Algorithm: AlgEd25519, KeyID: "k", Payload: "YnVuZGxl", Signature: "cw=="}
+	manifest := &SignedEnvelope{Algorithm: AlgEd25519, KeyID: "k", Payload: "bWFuaWZlc3Q=", Signature: "cw=="}
+
+	both := string(MarshalEnrollText(&EnrollResponse{
+		ProtocolVersion: Version, Status: StatusAccepted, Bundle: bundle, TextManifest: manifest,
+	}))
+	if strings.Contains(both, "bundle.") {
+		t.Errorf("bundle.* rendered next to a manifest:\n%s", both)
+	}
+	if !strings.Contains(both, "manifest.payload=bWFuaWZlc3Q=\n") {
+		t.Errorf("manifest missing:\n%s", both)
+	}
+
+	only := string(MarshalEnrollText(&EnrollResponse{
+		ProtocolVersion: Version, Status: StatusAccepted, Bundle: bundle,
+	}))
+	if !strings.Contains(only, "bundle.payload=YnVuZGxl\n") {
+		t.Errorf("bundle dropped although there is no manifest:\n%s", only)
+	}
+}
+
 func TestParseEnrollStatus(t *testing.T) {
 	for name, tc := range map[string]struct {
 		body   string
