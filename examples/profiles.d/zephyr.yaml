@@ -38,7 +38,7 @@ payload:
   wifi:
     networks:
       # Seal real passwords with `just secrets-seal` — never commit them.
-      - ssid: iota
+      - ssid: lab-network
         password: CHANGE-ME
         key_mgmt: "WPA-PSK"
 
@@ -50,4 +50,4 @@ payload:
     # ever opening the Cumulocity UI.
     issuer:
       mode: local
-      credential_ref: c8y-tedge-eu-latest
+      credential_ref: my-tenant
