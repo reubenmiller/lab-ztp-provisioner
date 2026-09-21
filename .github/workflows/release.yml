@@ -342,10 +342,16 @@ jobs:
           go install github.com/goreleaser/nfpm/v2/cmd/nfpm@${NFPM_VERSION}
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-      - name: Install just + envsubst
+      # Not apt's just: noble ships 1.21, which errors when the justfile's
+      # dotenv-path (deploy/.env, only created by `just up`) is missing.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
+      - name: Install envsubst
         run: |
           sudo apt-get update
-          sudo apt-get install -y just gettext-base
+          sudo apt-get install -y gettext-base
 
       - uses: actions/download-artifact@v8
         with:
