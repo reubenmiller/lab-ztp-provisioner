@@ -386,11 +386,19 @@ jobs:
         # repo — see plan §"Out of scope". For now, only the apk variant (which
         # uses our self-contained nfpm-alpine-rust.yaml) is built. Re-enable the
         # deb/rpm steps once those source files are committed.
+        #
+        # Packages the static musl binaries the rust-agent job already built
+        # (Alpine has no glibc, so not the gnu/BLE ones staged above) rather
+        # than `just pkg-alpine-rust-*`, whose Docker rebuild can't compile
+        # ring for the arm musl targets.
         run: |
           set -euo pipefail
-          for arch in amd64 arm64 armhf; do
-            just pkg-alpine-rust-${arch} "$VERSION"
+          for cell in amd64 arm64 armv7; do
+            tar -xzf artifacts/rust-binaries-linux-${cell}-musl/ztp-agent-rust-*-linux-${cell}-musl.tar.gz -C bin
           done
+          just _pkg packaging/nfpm-alpine-rust.yaml x86_64  amd64 apk "$VERSION"
+          just _pkg packaging/nfpm-alpine-rust.yaml aarch64 arm64 apk "$VERSION"
+          just _pkg packaging/nfpm-alpine-rust.yaml armv7   armv7 apk "$VERSION"
 
       - uses: actions/upload-artifact@v7
         with:
