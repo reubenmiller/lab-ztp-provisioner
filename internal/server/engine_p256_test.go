@@ -264,9 +264,22 @@ func TestEnroll_P256ProfileWithoutServerKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if got := e.PublicKeyP256(); got != "" {
+		t.Fatalf("PublicKeyP256 without a key = %q, want empty", got)
+	}
 	env, _ := p256DeviceEnvelope(t, protocol.EnrollRequest{DeviceID: "dev-nokey"})
 	if _, err := e.Enroll(ctx, env); err == nil {
 		t.Fatal("enrollment succeeded without a P-256 signing key")
+	}
+}
+
+// TestEngine_PublicKeyP256 checks the key /v1/server-info advertises to P-256
+// devices is a well-formed point they can pin.
+func TestEngine_PublicKeyP256(t *testing.T) {
+	e := p256Engine(t, store.NewMemory(), nil, nil)
+	pub := e.PublicKeyP256()
+	if _, err := protocol.DecodePublicKeyForAlg(pub, protocol.AlgECDSAP256); err != nil {
+		t.Fatalf("PublicKeyP256 %q: %v", pub, err)
 	}
 }
 

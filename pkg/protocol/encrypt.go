@@ -231,9 +231,10 @@ func SealModuleForDeviceSuite(devicePubB64 string, plaintext []byte, format stri
 // OpenSealedModuleP256 decrypts a SuiteP256 SealedPayload using the device's
 // ephemeral P-256 private key.
 //
-// The Go and Rust agents do not use this suite — it exists for constrained
-// devices — but the server's own tests round-trip through it, and it is the
-// executable reference for what a device implementation has to do.
+// The Go agent does not use this suite — it exists for constrained devices,
+// and the Rust agent implements it independently (clients/rust/src/encrypt.rs)
+// — but the server's own tests round-trip through it, and it is the executable
+// reference for what a device implementation has to do.
 func OpenSealedModuleP256(devicePriv *ecdh.PrivateKey, p *SealedPayload) ([]byte, string, error) {
 	if p == nil {
 		return nil, "", errors.New("nil sealed payload")

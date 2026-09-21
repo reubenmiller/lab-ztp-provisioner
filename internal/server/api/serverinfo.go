@@ -19,6 +19,9 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 	pub := s.Engine.PublicKey()
 	pubB64 := base64.StdEncoding.EncodeToString(pub)
 	keyID := s.Engine.SigningKeyID()
+	// Only present once some profile selects the p256 suite; devices on that
+	// suite pin this key instead of public_key.
+	pubP256 := s.Engine.PublicKeyP256()
 	agentScriptURL := ""
 	if len(s.AgentScript) > 0 {
 		agentScriptURL = absoluteURL(r, "/v1/agent.sh")
@@ -38,6 +41,9 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		}
 		writeKV("protocol_version", protocol.Version)
 		writeKV("public_key", pubB64)
+		if pubP256 != "" {
+			writeKV("public_key_p256", pubP256)
+		}
 		writeKV("key_id", keyID)
 		if agentScriptURL != "" {
 			writeKV("agent_script_url", agentScriptURL)
@@ -47,12 +53,14 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 
 	resp := struct {
 		ProtocolVersion string `json:"protocol_version"`
-		PublicKey       string `json:"public_key"` // base64 Ed25519
-		KeyID           string `json:"key_id"`     // matches signed envelopes
+		PublicKey       string `json:"public_key"`                // base64 Ed25519
+		PublicKeyP256   string `json:"public_key_p256,omitempty"` // base64 uncompressed P-256 point
+		KeyID           string `json:"key_id"`                    // matches signed envelopes
 		AgentScriptURL  string `json:"agent_script_url,omitempty"`
 	}{
 		ProtocolVersion: protocol.Version,
 		PublicKey:       pubB64,
+		PublicKeyP256:   pubP256,
 		KeyID:           keyID,
 		AgentScriptURL:  agentScriptURL,
 	}

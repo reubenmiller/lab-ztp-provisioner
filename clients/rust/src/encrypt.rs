@@ -1,10 +1,17 @@
-//! X25519 + ChaCha20-Poly1305 encryption — matches pkg/protocol/encrypt.go.
+//! Payload decryption — matches pkg/protocol/encrypt.go.
 //!
 //! Two shapes are used on the wire:
 //! - [`EncryptedPayload`]  — wraps the whole SignedEnvelope (full bundle encryption).
-//!   `ServerKey` = server's ephemeral X25519 pub.
+//!   `ServerKey` = server's ephemeral key-agreement pub.
 //! - [`SealedPayload`]    — wraps a single Module's payload.
-//!   `EphemeralPub` = server's ephemeral X25519 pub (different field name, same role).
+//!   `EphemeralPub` = server's ephemeral key-agreement pub (different field name, same role).
+//!
+//! Two algorithms, selected by the payload's own `alg`:
+//! - `x25519-chacha20poly1305` — the X25519 shared secret is the AEAD key.
+//! - `p256-hkdf-sha256-chacha20poly1305` — P-256 ECDH, then HKDF-SHA256
+//!   (empty salt, info `ztp/seal/v1`) derives the AEAD key. A P-256 shared
+//!   secret is a field element, not a uniform string, so it is never used
+//!   as a key directly.
 //!
 //! In both cases AEAD tag is appended to the ciphertext (AAD is empty, matching Go).
 
@@ -18,7 +25,71 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use x25519_dalek::{EphemeralSecret, PublicKey, StaticSecret};
 
+use crate::suite::Suite;
+
 pub const ALG: &str = "x25519-chacha20poly1305";
+/// Sealing algorithm of [`Suite::P256`].
+pub const ALG_P256: &str = "p256-hkdf-sha256-chacha20poly1305";
+
+/// HKDF info binding derived keys to this protocol version. Must match
+/// `p256HKDFInfo` in pkg/protocol/encrypt.go.
+const P256_HKDF_INFO: &[u8] = b"ztp/seal/v1";
+
+/// A per-attempt ephemeral key-agreement private key. The public half goes in
+/// `EnrollRequest.ephemeral_x25519` or `EnrollRequest.ephemeral_p256`.
+#[derive(Clone)]
+pub enum EphemeralKey {
+    X25519([u8; 32]),
+    P256(p256::SecretKey),
+}
+
+impl EphemeralKey {
+    /// Generate a fresh ephemeral key for `suite`.
+    pub fn generate(suite: Suite) -> crate::Result<Self> {
+        Ok(match suite {
+            Suite::Ed25519X25519 => EphemeralKey::X25519(generate_x25519()?.0),
+            Suite::P256 => EphemeralKey::P256(p256::SecretKey::random(&mut OsRng)),
+        })
+    }
+
+    pub fn suite(&self) -> Suite {
+        match self {
+            EphemeralKey::X25519(_) => Suite::Ed25519X25519,
+            EphemeralKey::P256(_) => Suite::P256,
+        }
+    }
+
+    /// Base64 wire form of the public half: 32 raw X25519 bytes, or a
+    /// 65-byte uncompressed P-256 point.
+    pub fn public_b64(&self) -> String {
+        match self {
+            EphemeralKey::X25519(priv_bytes) => {
+                STANDARD.encode(PublicKey::from(&StaticSecret::from(*priv_bytes)).as_bytes())
+            }
+            EphemeralKey::P256(sk) => {
+                use p256::elliptic_curve::sec1::ToEncodedPoint;
+                STANDARD.encode(sk.public_key().to_encoded_point(false).as_bytes())
+            }
+        }
+    }
+
+    /// Derive the AEAD key shared with the sender's ephemeral public key,
+    /// checking that the payload's algorithm matches this key's suite.
+    fn aead_key(&self, alg: &str, peer_pub_b64: &str, field: &str) -> crate::Result<[u8; 32]> {
+        match (alg, self) {
+            (ALG, EphemeralKey::X25519(priv_bytes)) => {
+                Ok(x25519(priv_bytes, &decode32(peer_pub_b64, field)?))
+            }
+            (ALG_P256, EphemeralKey::P256(sk)) => p256_key(sk, peer_pub_b64, field),
+            (ALG, _) | (ALG_P256, _) => Err(format!(
+                "payload is sealed with {alg:?} but this agent's ephemeral key is for the {} suite",
+                self.suite()
+            )
+            .into()),
+            _ => Err(format!("unsupported alg {alg:?}").into()),
+        }
+    }
+}
 
 /// Generate a fresh X25519 keypair for one enrollment attempt.
 ///
@@ -49,18 +120,13 @@ pub struct EncryptedPayload {
     pub ciphertext: String, // base64 (ciphertext + 16-byte AEAD tag)
 }
 
-/// Decrypt an [`EncryptedPayload`] addressed to us using our ephemeral X25519
+/// Decrypt an [`EncryptedPayload`] addressed to us using our ephemeral
 /// private key.
-pub fn open_for_device(device_priv: &[u8; 32], p: &EncryptedPayload) -> crate::Result<Vec<u8>> {
-    if p.alg != ALG {
-        return Err(format!("unsupported alg {:?}", p.alg).into());
-    }
-    let srv_pub_bytes = decode32(&p.server_key, "server_key")?;
+pub fn open_for_device(device_priv: &EphemeralKey, p: &EncryptedPayload) -> crate::Result<Vec<u8>> {
+    let key = device_priv.aead_key(&p.alg, &p.server_key, "server_key")?;
     let nonce_bytes = decode_bytes(&p.nonce, 12, "nonce")?;
     let ct = STANDARD.decode(&p.ciphertext)?;
-
-    let shared = x25519(device_priv, &srv_pub_bytes);
-    aeadOpen(&shared, &nonce_bytes, &ct)
+    aeadOpen(&key, &nonce_bytes, &ct)
 }
 
 // ---- SealedPayload ----------------------------------------------------------
@@ -76,16 +142,11 @@ pub struct SealedPayload {
 }
 
 /// Decrypt a [`SealedPayload`] and return `(plaintext, format)`.
-pub fn open_sealed_module(device_priv: &[u8; 32], p: &SealedPayload) -> crate::Result<(Vec<u8>, String)> {
-    if p.alg != ALG {
-        return Err(format!("unsupported alg {:?}", p.alg).into());
-    }
-    let srv_pub_bytes = decode32(&p.ephemeral_pub, "ephemeral_pub")?;
+pub fn open_sealed_module(device_priv: &EphemeralKey, p: &SealedPayload) -> crate::Result<(Vec<u8>, String)> {
+    let key = device_priv.aead_key(&p.alg, &p.ephemeral_pub, "ephemeral_pub")?;
     let nonce_bytes = decode_bytes(&p.nonce, 12, "nonce")?;
     let ct = STANDARD.decode(&p.ciphertext)?;
-
-    let shared = x25519(device_priv, &srv_pub_bytes);
-    let plaintext = aeadOpen(&shared, &nonce_bytes, &ct)?;
+    let plaintext = aeadOpen(&key, &nonce_bytes, &ct)?;
     Ok((plaintext, p.format.clone()))
 }
 
@@ -96,6 +157,26 @@ fn x25519(priv_bytes: &[u8; 32], pub_bytes: &[u8; 32]) -> [u8; 32] {
     let their_pub = PublicKey::from(*pub_bytes);
     let shared = secret.diffie_hellman(&their_pub);
     *shared.as_bytes()
+}
+
+/// P-256 ECDH against the sender's uncompressed point, then HKDF-SHA256.
+fn p256_key(sk: &p256::SecretKey, peer_pub_b64: &str, field: &str) -> crate::Result<[u8; 32]> {
+    let peer = STANDARD.decode(peer_pub_b64)?;
+    if peer.len() != 65 || peer[0] != 4 {
+        return Err(format!(
+            "{field}: expected a 65-byte uncompressed P-256 point, got {} bytes",
+            peer.len()
+        )
+        .into());
+    }
+    let peer = p256::PublicKey::from_sec1_bytes(&peer)
+        .map_err(|e| format!("{field}: invalid P-256 point: {e}"))?;
+    let shared = p256::ecdh::diffie_hellman(sk.to_nonzero_scalar(), peer.as_affine());
+    let mut key = [0u8; 32];
+    hkdf::Hkdf::<sha2::Sha256>::new(None, shared.raw_secret_bytes())
+        .expand(P256_HKDF_INFO, &mut key)
+        .map_err(|e| format!("hkdf: {e}"))?;
+    Ok(key)
 }
 
 #[allow(non_snake_case)]
@@ -162,7 +243,7 @@ mod tests {
         let plaintext = b"hello world";
 
         let ep = seal_with_fixed_nonce(&device_pub, &server_priv, &nonce, plaintext);
-        let got = open_for_device(&device_priv, &ep).unwrap();
+        let got = open_for_device(&EphemeralKey::X25519(device_priv), &ep).unwrap();
         assert_eq!(got, plaintext);
     }
 
@@ -181,6 +262,45 @@ mod tests {
 
         // Use a wrong device key
         let wrong_priv: [u8; 32] = [42u8; 32];
-        assert!(open_for_device(&wrong_priv, &ep).is_err());
+        assert!(open_for_device(&EphemeralKey::X25519(wrong_priv), &ep).is_err());
+    }
+
+    /// Server-side P-256 seal, mirroring sealWithSuite in encrypt.go.
+    fn seal_p256(device_pub_b64: &str, plaintext: &[u8]) -> SealedPayload {
+        use p256::elliptic_curve::sec1::ToEncodedPoint;
+        let server = p256::SecretKey::random(&mut OsRng);
+        let key = p256_key(&server, device_pub_b64, "device").unwrap();
+        let nonce = [7u8; 12];
+        let ct = ChaCha20Poly1305::new(Key::from_slice(&key))
+            .encrypt(Nonce::from_slice(&nonce), plaintext)
+            .unwrap();
+        SealedPayload {
+            alg: ALG_P256.to_string(),
+            ephemeral_pub: STANDARD.encode(server.public_key().to_encoded_point(false).as_bytes()),
+            nonce: STANDARD.encode(nonce),
+            ciphertext: STANDARD.encode(ct),
+            format: "raw".to_string(),
+        }
+    }
+
+    #[test]
+    fn p256_sealed_module_roundtrip() {
+        let device = EphemeralKey::generate(Suite::P256).unwrap();
+        let sealed = seal_p256(&device.public_b64(), b"[c8y]\nurl=x\n");
+        let (pt, format) = open_sealed_module(&device, &sealed).unwrap();
+        assert_eq!(pt, b"[c8y]\nurl=x\n");
+        assert_eq!(format, "raw");
+
+        let other = EphemeralKey::generate(Suite::P256).unwrap();
+        assert!(open_sealed_module(&other, &sealed).is_err());
+    }
+
+    #[test]
+    fn suite_mismatch_is_named() {
+        let device = EphemeralKey::generate(Suite::P256).unwrap();
+        let sealed = seal_p256(&device.public_b64(), b"x");
+        let x = EphemeralKey::generate(Suite::Ed25519X25519).unwrap();
+        let err = open_sealed_module(&x, &sealed).unwrap_err().to_string();
+        assert!(err.contains("ed25519-x25519"), "{err}");
     }
 }

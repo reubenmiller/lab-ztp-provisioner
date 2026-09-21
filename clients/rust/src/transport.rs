@@ -80,8 +80,13 @@ impl ureq::Resolver for MdnsResolver {
     }
 }
 
-/// GET /v1/server-info and return the base64-encoded Ed25519 public key.
-pub fn fetch_server_pubkey(agent: &ureq::Agent, server_url: &str) -> crate::Result<String> {
+/// GET /v1/server-info and return the base64-encoded bundle-signing public
+/// key for `suite`: `public_key` (Ed25519) or `public_key_p256`.
+pub fn fetch_server_pubkey(
+    agent: &ureq::Agent,
+    server_url: &str,
+    suite: crate::suite::Suite,
+) -> crate::Result<String> {
     let url = format!("{server_url}/v1/server-info");
     let resp = agent
         .get(&url)
@@ -91,15 +96,27 @@ pub fn fetch_server_pubkey(agent: &ureq::Agent, server_url: &str) -> crate::Resu
     #[derive(serde::Deserialize)]
     struct ServerInfo {
         public_key: String,
+        #[serde(default)]
+        public_key_p256: String,
     }
     let info: ServerInfo = resp
         .into_json()
         .map_err(|e| format!("decode /v1/server-info: {e}"))?;
 
-    if info.public_key.is_empty() {
-        return Err("/v1/server-info: empty public_key field".into());
+    match suite {
+        crate::suite::Suite::Ed25519X25519 if info.public_key.is_empty() => {
+            Err("/v1/server-info: empty public_key field".into())
+        }
+        crate::suite::Suite::Ed25519X25519 => Ok(info.public_key),
+        // The server only creates a P-256 key once some profile (or its
+        // default) selects the p256 suite.
+        crate::suite::Suite::P256 if info.public_key_p256.is_empty() => Err(
+            "/v1/server-info: no public_key_p256 — the server has no P-256 signing key \
+             (no profile selects crypto.suite: p256)"
+                .into(),
+        ),
+        crate::suite::Suite::P256 => Ok(info.public_key_p256),
     }
-    Ok(info.public_key)
 }
 
 /// POST /v1/enroll with `env` and return the parsed `EnrollResponse`.

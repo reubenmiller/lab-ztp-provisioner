@@ -13,6 +13,9 @@
 #   - send ephemeral_p256 (not ephemeral_x25519) for sealing
 #   - usually ask for response_format: "text" so they need no JSON parser
 #
+# The Rust agent can also enrol on this profile — useful for testing the
+# suite from a Linux box: `ztp-agent --crypto-suite p256 --profile zephyr`.
+#
 # The server generates and persists the matching P-256 bundle-signing key on
 # first start once any profile selects this suite; the public key is logged
 # and written to "<signing_key_file>.p256.pub" for pinning on devices.

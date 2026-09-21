@@ -29,7 +29,7 @@ pub const CAPABILITIES: &[&str] = &[
 // ---- EnrollRequest ----------------------------------------------------------
 
 /// Sent by the device to request a provisioning bundle.
-/// Signed with the device's long-lived Ed25519 identity key.
+/// Signed with the device's long-lived identity key (Ed25519 or P-256).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnrollRequest {
     pub protocol_version: String,
@@ -39,13 +39,27 @@ pub struct EnrollRequest {
     pub timestamp: DateTime<Utc>,
 
     pub device_id: String,
-    pub public_key: String, // base64(Ed25519 pub, 32 bytes)
+    pub public_key: String, // base64(Ed25519 pub, 32 bytes | P-256 uncompressed point, 65 bytes)
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ephemeral_x25519: Option<String>, // base64(X25519 pub, 32 bytes)
 
     #[serde(skip_serializing_if = "is_false")]
     pub encrypt_bundle: bool,
+
+    /// P-256 counterpart of `ephemeral_x25519`; a device sends whichever
+    /// matches the suite it signs with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ephemeral_p256: Option<String>, // base64(uncompressed P-256 point, 65 bytes)
+
+    /// "" / "json" → JSON EnrollResponse; "text" → line-based manifest.
+    /// Not used by this agent, mirrored so the type matches wire.go.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<String>,
+
+    /// Largest response the device can buffer; 0 / absent = unlimited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_response_bytes: Option<u64>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bootstrap_token: Option<String>,

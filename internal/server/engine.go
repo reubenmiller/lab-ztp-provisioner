@@ -100,6 +100,19 @@ func (e *Engine) PublicKey() ed25519.PublicKey {
 	return e.cfg.SigningKey.Public().(ed25519.PublicKey)
 }
 
+// PublicKeyP256 returns the base64 uncompressed P-256 bundle-signing public
+// key, or "" when no profile selects the p256 suite and so no key exists.
+func (e *Engine) PublicKeyP256() string {
+	if e.cfg.SigningKeyP256 == nil {
+		return ""
+	}
+	pub, err := protocol.EncodePublicKeyForSuite(&e.cfg.SigningKeyP256.PublicKey, protocol.SuiteP256)
+	if err != nil {
+		return ""
+	}
+	return pub
+}
+
 // SigningKeyID returns the key identifier embedded in signed envelopes.
 func (e *Engine) SigningKeyID() string { return e.cfg.SigningKeyID }
 
