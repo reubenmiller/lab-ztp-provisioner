@@ -258,11 +258,25 @@ jobs:
           DPKG_ARCH: ${{ matrix.dpkg_arch }}
         run: |
           set -exuo pipefail
-          cat /etc/apt/apt-mirrors.txt || true
           if [[ "$DPKG_ARCH" != "amd64" ]]; then
+            # The runner's default sources (archive/security/azure mirrors)
+            # only carry amd64/i386; foreign arches live on ports.ubuntu.com.
+            # Pin the default sources to the native arches so apt doesn't 404
+            # on them, then add a ports source for the foreign arch.
+            if ! grep -q '^Architectures:' /etc/apt/sources.list.d/ubuntu.sources; then
+              sudo sed -i '/^Types:/a Architectures: amd64 i386' /etc/apt/sources.list.d/ubuntu.sources
+            fi
             sudo dpkg --add-architecture "$DPKG_ARCH"
+            sudo tee /etc/apt/sources.list.d/ubuntu-ports.sources >/dev/null <<EOF
+          Types: deb
+          URIs: http://ports.ubuntu.com/ubuntu-ports/
+          Suites: noble noble-updates noble-security
+          Components: main universe restricted multiverse
+          Architectures: ${DPKG_ARCH}
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
           fi
-          sudo apt-get update ||:
+          sudo apt-get update
           if [[ "$DPKG_ARCH" == "amd64" ]]; then
             sudo apt-get install -y libdbus-1-dev pkg-config
           else
