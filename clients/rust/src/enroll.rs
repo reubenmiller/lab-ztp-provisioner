@@ -1,7 +1,8 @@
 //! Core enrollment loop — mirrors internal/agent/run.go.
 //!
 //! Behaviour:
-//!  1. Build a fresh ephemeral X25519 keypair per attempt.
+//!  1. Build a fresh ephemeral key-agreement keypair per attempt (X25519 or
+//!     P-256, following the identity key's crypto suite).
 //!  2. Sign an EnrollRequest with the device's identity key.
 //!  3. POST to /v1/enroll.
 //!  4. Handle status:
@@ -9,7 +10,6 @@
 //!     - pending  → sleep (retry_after hint or cfg.pending_poll), retry
 //!     - accepted → verify bundle signature, unseal modules, dispatch appliers
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -17,6 +17,8 @@ use crate::appliers::Dispatcher;
 use crate::encrypt;
 use crate::identity::Identity;
 use crate::sign;
+use crate::suite::Suite;
+use crate::textmanifest;
 use crate::transport;
 use crate::wire::{
     EnrollRequest, EnrollResponse, EnrollStatus, ProvisioningBundle, VERSION,
@@ -71,15 +73,20 @@ pub struct Config {
     /// (allowlist/token, sticky persisted name, override, fact-based
     /// selector) wins over it. `None` or empty = no hint sent.
     pub profile: Option<String>,
-    /// Server signing public key (32 raw Ed25519 bytes).
-    /// `None` means TOFU mode — bundle signature verification is skipped.
-    pub server_pub_key: Option<[u8; 32]>,
+    /// Server bundle-signing public key, for the same crypto suite as
+    /// `identity`. `None` means TOFU mode — bundle signature verification
+    /// is skipped.
+    pub server_pub_key: Option<sign::PublicKey>,
     pub ca_file: Option<PathBuf>,
     pub insecure: bool,
     pub identity: Identity,
     pub dispatcher: Dispatcher,
     pub agent_version: String,
     pub encrypt: bool,
+    /// Ask the server for the text rendering (`response_format: "text"`)
+    /// instead of JSON. The Rust agent has no need for it; it exists so the
+    /// path a constrained device uses can be exercised from a Linux box.
+    pub text_response: bool,
     /// How long to wait between retries when the server says "pending".
     /// Default: 10 s.
     pub pending_poll: Duration,
@@ -123,10 +130,7 @@ pub struct Config {
 pub fn run(mut cfg: Config) -> crate::Result<()> {
     let agent = transport::build_agent(cfg.ca_file.as_deref(), cfg.insecure, cfg.dial_addr.as_deref())?;
 
-    let server_pub: Option<ed25519_dalek::VerifyingKey> = cfg.server_pub_key
-        .as_ref()
-        .map(|k| sign::decode_public_key(&STANDARD.encode(k)))
-        .transpose()?;
+    let server_pub = cfg.server_pub_key.clone();
 
     let device_id = resolve_device_id(&cfg.device_id)?;
     log::info!("enrolling device device_id={device_id}");
@@ -146,12 +150,11 @@ pub fn run(mut cfg: Config) -> crate::Result<()> {
             return Err(format!("exceeded max attempts ({})", cfg.max_attempts).into());
         }
 
-        // Fresh ephemeral X25519 keypair per attempt to maintain forward
-        // secrecy: a captured ciphertext is tied to this one-shot key.
-        let (eph_priv, eph_pub) = encrypt::generate_x25519()?;
-        let eph_pub_b64 = STANDARD.encode(eph_pub);
+        // Fresh ephemeral keypair per attempt to maintain forward secrecy:
+        // a captured ciphertext is tied to this one-shot key.
+        let eph_priv = encrypt::EphemeralKey::generate(cfg.identity.suite())?;
 
-        let req = build_request(&device_id, &cfg, &eph_pub_b64);
+        let req = build_request(&device_id, &cfg, &eph_priv);
         let env = sign::sign(&req, cfg.identity.signing_key(), "device")?;
 
         let resp = match transport::post_enroll(&agent, &cfg.server_url, &env) {
@@ -220,12 +223,14 @@ pub fn run(mut cfg: Config) -> crate::Result<()> {
 
 pub(crate) fn handle_accepted(
     resp: EnrollResponse,
-    eph_priv: &[u8; 32],
-    server_pub: Option<&ed25519_dalek::VerifyingKey>,
+    eph_priv: &encrypt::EphemeralKey,
+    server_pub: Option<&sign::PublicKey>,
     cfg: &Config,
     _device_id: &str,
 ) -> crate::Result<()> {
-    // If the server encrypted the entire bundle, decrypt it first.
+    // If the server encrypted the entire bundle, decrypt it first. For a
+    // text-format request the plaintext is the manifest.* records rather
+    // than a JSON envelope.
     let signed_env = if let Some(enc) = resp.encrypted_bundle {
         if !cfg.encrypt {
             return Err(
@@ -233,8 +238,16 @@ pub(crate) fn handle_accepted(
             );
         }
         let plain = encrypt::open_for_device(eph_priv, &enc)?;
-        serde_json::from_slice(&plain)
-            .map_err(|e| format!("decode encrypted envelope: {e}"))?
+        if cfg.text_response {
+            let text = String::from_utf8(plain).map_err(|e| format!("decode encrypted manifest: {e}"))?;
+            textmanifest::manifest_envelope_from_text(&text)?
+        } else {
+            serde_json::from_slice(&plain)
+                .map_err(|e| format!("decode encrypted envelope: {e}"))?
+        }
+    } else if cfg.text_response {
+        resp.text_manifest
+            .ok_or("server returned accepted with no text manifest")?
     } else {
         resp.bundle
             .ok_or("server returned accepted with no bundle")?
@@ -245,8 +258,11 @@ pub(crate) fn handle_accepted(
         Some(key) => sign::verify(&signed_env, key)?,
         None => sign::decode_payload_unverified(&signed_env)?,
     };
-    let mut bundle: ProvisioningBundle =
-        serde_json::from_slice(&payload_bytes).map_err(|e| format!("decode bundle: {e}"))?;
+    let mut bundle: ProvisioningBundle = if cfg.text_response {
+        textmanifest::parse_manifest(&payload_bytes, eph_priv.suite())?
+    } else {
+        serde_json::from_slice(&payload_bytes).map_err(|e| format!("decode bundle: {e}"))?
+    };
 
     // The bundle's issued_at field is inside the signed payload, so it
     // carries the same trust as the rest of the bundle. Apply it to the
@@ -298,7 +314,7 @@ pub(crate) fn handle_accepted(
 }
 
 /// Unseal any Module that arrived with a SealedPayload.
-fn unseal_modules(bundle: &mut ProvisioningBundle, device_priv: &[u8; 32]) -> crate::Result<()> {
+fn unseal_modules(bundle: &mut ProvisioningBundle, device_priv: &encrypt::EphemeralKey) -> crate::Result<()> {
     for m in &mut bundle.modules {
         let sealed = match m.sealed.take() {
             Some(s) => s,
@@ -329,7 +345,13 @@ fn unseal_modules(bundle: &mut ProvisioningBundle, device_priv: &[u8; 32]) -> cr
     Ok(())
 }
 
-pub(crate) fn build_request(device_id: &str, cfg: &Config, eph_pub_b64: &str) -> EnrollRequest {
+pub(crate) fn build_request(device_id: &str, cfg: &Config, eph: &encrypt::EphemeralKey) -> EnrollRequest {
+    // Publish the ephemeral key in the field for its suite; the server seals
+    // to whichever one the resolved profile's suite expects.
+    let (ephemeral_x25519, ephemeral_p256) = match eph.suite() {
+        Suite::Ed25519X25519 => (Some(eph.public_b64()), None),
+        Suite::P256 => (None, Some(eph.public_b64())),
+    };
     let metadata = cfg.profile.as_ref().filter(|s| !s.is_empty()).map(|p| {
         let mut m = std::collections::HashMap::new();
         m.insert("profile".to_string(), p.clone());
@@ -340,9 +362,12 @@ pub(crate) fn build_request(device_id: &str, cfg: &Config, eph_pub_b64: &str) ->
         nonce: sign::new_nonce(),
         timestamp: chrono::Utc::now() + cfg.clock_offset,
         device_id: device_id.to_string(),
-        public_key: sign::encode_public_key(&cfg.identity.verifying_key()),
-        ephemeral_x25519: Some(eph_pub_b64.to_string()),
+        public_key: sign::encode_public_key(&cfg.identity.public_key()),
+        ephemeral_x25519,
         encrypt_bundle: cfg.encrypt,
+        ephemeral_p256,
+        response_format: cfg.text_response.then(|| "text".to_string()),
+        max_response_bytes: None,
         bootstrap_token: cfg.bootstrap_token.clone(),
         facts: crate::facts::collect(&cfg.agent_version),
         capabilities: CAPABILITIES.iter().map(|s| s.to_string()).collect(),
@@ -410,8 +435,6 @@ mod system_clock_tests {
 
     use super::*;
     use chrono::{DateTime, Utc};
-    use ed25519_dalek::SigningKey;
-    use rand::rngs::OsRng;
     use std::sync::{Mutex, OnceLock};
 
     use crate::{appliers, clock, encrypt, identity, sign, wire};
@@ -459,11 +482,19 @@ mod system_clock_tests {
         DateTime::from_timestamp(t.timestamp(), 0).unwrap()
     }
 
-    fn make_cfg(tmp: &tempfile::TempDir, policy: clock::Policy) -> (Config, SigningKey) {
+    fn make_cfg(tmp: &tempfile::TempDir, policy: clock::Policy) -> (Config, sign::PrivateKey) {
+        make_cfg_suite(tmp, policy, Suite::Ed25519X25519)
+    }
+
+    fn make_cfg_suite(
+        tmp: &tempfile::TempDir,
+        policy: clock::Policy,
+        suite: Suite,
+    ) -> (Config, sign::PrivateKey) {
         let id_path = tmp.path().join("id.key");
-        let id = identity::Identity::load_or_create(&id_path).expect("identity");
-        let server_signing = SigningKey::generate(&mut OsRng);
-        let server_pub: [u8; 32] = server_signing.verifying_key().to_bytes();
+        let id = identity::Identity::load_or_create(&id_path, suite).expect("identity");
+        let server_signing = sign::PrivateKey::generate(suite);
+        let server_pub = server_signing.public_key();
         let cfg = Config {
             server_url: String::new(),
             device_id: "dev-clock-test".to_string(),
@@ -476,6 +507,7 @@ mod system_clock_tests {
             dispatcher: appliers::Dispatcher::new(tmp.path().join("appliers")),
             agent_version: "test".to_string(),
             encrypt: false,
+            text_response: false,
             pending_poll: Duration::from_millis(10),
             max_attempts: 1,
             max_network_failures: 1,
@@ -490,7 +522,7 @@ mod system_clock_tests {
     }
 
     fn signed_bundle(
-        server_signing: &SigningKey,
+        server_signing: &sign::PrivateKey,
         device_id: &str,
         issued_at: DateTime<Utc>,
     ) -> sign::SignedEnvelope {
@@ -504,11 +536,6 @@ mod system_clock_tests {
         sign::sign(&bundle, server_signing, "server").expect("sign bundle")
     }
 
-    fn fresh_eph_priv() -> [u8; 32] {
-        let (priv_, _) = encrypt::generate_x25519().expect("eph keypair");
-        priv_
-    }
-
     fn run_handle_accepted(cfg: &Config, signed: sign::SignedEnvelope) {
         let resp = wire::EnrollResponse {
             protocol_version: wire::VERSION.to_string(),
@@ -518,12 +545,10 @@ mod system_clock_tests {
             bundle: Some(signed),
             encrypted_bundle: None,
             server_time: None,
+            text_manifest: None,
         };
-        let server_pub_decoded =
-            ed25519_dalek::VerifyingKey::from_bytes(&cfg.server_pub_key.unwrap())
-                .expect("decode server pub");
-        let eph = fresh_eph_priv();
-        handle_accepted(resp, &eph, Some(&server_pub_decoded), cfg, "dev-clock-test")
+        let eph = encrypt::EphemeralKey::generate(cfg.identity.suite()).expect("eph keypair");
+        handle_accepted(resp, &eph, cfg.server_pub_key.as_ref(), cfg, "dev-clock-test")
             .expect("handle_accepted");
     }
 
@@ -541,6 +566,36 @@ mod system_clock_tests {
             assert_eq!(r.len(), 1, "expected one clock-set call");
             assert_eq!(r[0], issued_at, "setter received wrong target");
         });
+    }
+
+    #[test]
+    fn p256_bundle_verifies() {
+        with_recorder(|| {
+            let tmp = tempfile::tempdir().unwrap();
+            let (cfg, server_key) = make_cfg_suite(&tmp, clock::Policy::Auto, Suite::P256);
+            let issued_at = trunc_secs(Utc::now() + chrono::Duration::hours(2));
+            let signed = signed_bundle(&server_key, "dev-clock-test", issued_at);
+            assert_eq!(signed.alg, "ecdsa-p256-sha256");
+
+            run_handle_accepted(&cfg, signed);
+
+            assert_eq!(recorded(), vec![issued_at]);
+        });
+    }
+
+    #[test]
+    fn p256_request_carries_ephemeral_p256() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (cfg, _) = make_cfg_suite(&tmp, clock::Policy::Off, Suite::P256);
+        let eph = encrypt::EphemeralKey::generate(Suite::P256).unwrap();
+        let req = build_request("dev", &cfg, &eph);
+        assert!(req.ephemeral_x25519.is_none());
+        assert_eq!(req.ephemeral_p256.as_deref(), Some(eph.public_b64().as_str()));
+        assert_eq!(sign::decode_public_key(&req.public_key).unwrap(), cfg.identity.public_key());
+
+        let env = sign::sign(&req, cfg.identity.signing_key(), "device").unwrap();
+        assert_eq!(env.alg, "ecdsa-p256-sha256");
+        sign::verify(&env, &cfg.identity.public_key()).unwrap();
     }
 
     #[test]

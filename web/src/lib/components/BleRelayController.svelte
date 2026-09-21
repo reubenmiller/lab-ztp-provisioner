@@ -181,8 +181,25 @@
       } catch {}
 
       type EnrollResp = { status?: string; reason?: string; retry_after?: number };
-      let parsed: EnrollResp = {};
-      try { parsed = JSON.parse(new TextDecoder().decode(respBody)); } catch {}
+      // The body is JSON, or key=value lines when the device asked for
+      // response_format "text" (see pkg/protocol/enrolltext.go). The device
+      // chose the rendering, so read status from either.
+      const parseEnrollResp = (body: Uint8Array): EnrollResp => {
+        const text = new TextDecoder().decode(body);
+        try { return JSON.parse(text); } catch {}
+        const kv: Record<string, string> = {};
+        for (const line of text.split('\n')) {
+          const i = line.indexOf('=');
+          if (i > 0) kv[line.slice(0, i)] = line.slice(i + 1).replace(/\r$/, '');
+        }
+        const retry = Number(kv.retry_after);
+        return {
+          status: kv.status,
+          reason: kv.reason?.replace(/\\n/g, '\n').replace(/\\r/g, '\r'),
+          retry_after: Number.isFinite(retry) && retry > 0 ? retry : undefined,
+        };
+      };
+      const parsed = parseEnrollResp(respBody);
 
       if (parsed.status === 'pending') {
         setStatus('BLE: awaiting approval…');

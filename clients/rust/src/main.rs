@@ -6,11 +6,11 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 use clap::{CommandFactory, FromArgMatches, Parser};
 use clap::parser::ValueSource;
 
-use ztp_agent::{appliers, ble, enroll, identity, transport};
+use ztp_agent::{appliers, ble, enroll, identity, sign, transport};
+use ztp_agent::suite::Suite;
 use ztp_agent::Result;
 #[cfg(feature = "mdns")]
 use ztp_agent::mdns;
@@ -37,8 +37,9 @@ struct Cli {
     #[arg(long, value_delimiter = ',')]
     server_list: Vec<String>,
 
-    /// Path to the device's long-lived Ed25519 identity key.
-    /// Created automatically on first run (permissions 0600).
+    /// Path to the device's long-lived identity key (Ed25519 or P-256,
+    /// following --crypto-suite). Created automatically on first run
+    /// (permissions 0600).
     #[arg(long, default_value = "/var/lib/ztp/identity.key")]
     identity: PathBuf,
 
@@ -65,13 +66,15 @@ struct Cli {
     #[arg(long, default_value = "")]
     device_id: String,
 
-    /// Base64-encoded Ed25519 public key used to verify the provisioning bundle.
+    /// Base64-encoded server public key used to verify the provisioning bundle:
+    /// a 32-byte Ed25519 key, or with --crypto-suite p256 the server's 65-byte
+    /// uncompressed P-256 key ("<signing_key_file>.p256.pub" on the server).
     /// If omitted, fetched automatically from /v1/server-info.
     /// Also populated from the mDNS TXT record `pubkey=` when using --mdns.
     #[arg(long, default_value = "")]
     server_pubkey: String,
 
-    /// Path to a file containing the base64-encoded Ed25519 server public key.
+    /// Path to a file containing the base64-encoded server public key.
     /// Used when --server-pubkey is not set. Silently ignored when absent.
     #[arg(long, default_value = "/etc/ztp/server.pub")]
     server_pubkey_file: PathBuf,
@@ -98,9 +101,27 @@ struct Cli {
     #[arg(long, default_value = "_ztp._tcp")]
     mdns_service: String,
 
-    /// Request fully end-to-end encrypted bundle (X25519+ChaCha20-Poly1305).
+    /// Request fully end-to-end encrypted bundle (X25519 or P-256 key
+    /// agreement + ChaCha20-Poly1305, following --crypto-suite).
     #[arg(long)]
     encrypt: bool,
+
+    /// Crypto suite for this device's identity and sealing keys.
+    ///   ed25519-x25519 — Ed25519 signatures, X25519 sealing (default).
+    ///   p256           — ECDSA P-256 signatures, P-256 ECDH + HKDF sealing.
+    /// Must match the `crypto.suite` of the server profile the device lands
+    /// on. The identity key is created for this suite on first run; an
+    /// existing key of another suite is an error, not a silent switch.
+    /// Also settable via ZTP_CRYPTO_SUITE env var.
+    #[arg(long, default_value = "ed25519-x25519")]
+    crypto_suite: String,
+
+    /// Testing only: "text" asks the server for the line-based response a
+    /// constrained device parses (response_format in the signed request)
+    /// instead of JSON. Lets the BLE-relay + text + p256 path a Zephyr
+    /// device uses be exercised from Linux. Values: json (default), text.
+    #[arg(long, default_value = "json", hide = true)]
+    response_format: String,
 
     /// Ordered comma-separated list of enrollment transports to attempt.
     /// Each transport is tried in order; the first successful enrollment wins.
@@ -229,6 +250,7 @@ struct FileConfig {
     mdns_service:       Option<String>,
     transport:          Option<String>,
     encrypt:            Option<bool>,
+    crypto_suite:       Option<String>,
     insecure:           Option<bool>,
     verbose:            Option<bool>,
     debug:              Option<String>,
@@ -287,7 +309,8 @@ fn main() {
     if !cli_set("insecure")      { if let Some(v) = file_cfg.insecure { cli.insecure = v; } }
     if !cli_set("mdns")          { if let Some(v) = file_cfg.mdns    { cli.mdns = v; } }
     if !cli_set("encrypt")       { if let Some(v) = file_cfg.encrypt { cli.encrypt = v; } }
-    if !cli_set("v")             { if let Some(v) = file_cfg.verbose { cli.verbose = v; } }
+    if !cli_set("crypto_suite")  { if let Some(v) = file_cfg.crypto_suite { cli.crypto_suite = v; } }
+    if !cli_set("verbose")       { if let Some(v) = file_cfg.verbose { cli.verbose = v; } }
     if !cli_set("ble_name_prefix") { if let Some(v) = file_cfg.ble_name_prefix { cli.ble_name_prefix = v; } }
     if !cli_set("system_clock")    { if let Some(v) = file_cfg.system_clock    { cli.system_clock = v; } }
     // server_list: config uses a comma-string; CLI uses Vec<String>
@@ -408,6 +431,13 @@ fn main() {
         }
     }
 
+    // crypto_suite: CLI > ZTP_CRYPTO_SUITE env > config file > "ed25519-x25519"
+    if !cli_set("crypto_suite") {
+        if let Ok(v) = std::env::var("ZTP_CRYPTO_SUITE") {
+            if !v.is_empty() { cli.crypto_suite = v; }
+        }
+    }
+
     // system_clock: CLI > ZTP_SYSTEM_CLOCK env > config file > "auto"
     if !cli_set("system_clock") {
         if let Ok(v) = std::env::var("ZTP_SYSTEM_CLOCK") {
@@ -479,6 +509,17 @@ fn run(
     let system_clock_policy = ztp_agent::clock::parse_policy(&cli.system_clock)
         .map_err(|e| format!("invalid --system-clock: {e}"))?;
 
+    let suite: Suite = cli
+        .crypto_suite
+        .parse()
+        .map_err(|e| format!("invalid --crypto-suite: {e}"))?;
+
+    let text_response = match cli.response_format.as_str() {
+        "" | "json" => false,
+        "text" => true,
+        other => return Err(format!("invalid --response-format {other:?} (want json or text)").into()),
+    };
+
     // --- transport list and HTTP candidate collection ----------------------
     let mut server_pubkey = cli.server_pubkey.clone();
     let transports = build_transport_list(&cli.transport)?;
@@ -498,7 +539,8 @@ fn run(
     };
 
     // --- identity ----------------------------------------------------------
-    let identity = identity::Identity::load_or_create(&cli.identity)?;
+    let identity = identity::Identity::load_or_create(&cli.identity, suite)?;
+    log::info!("device identity loaded suite={suite}");
 
     // --- bootstrap token ---------------------------------------------------
     let bootstrap_token = resolve_token(&cli.token, cli.token_file.as_deref())?;
@@ -519,17 +561,10 @@ fn run(
 
     // Decode explicitly-supplied server pubkey. Used directly for BLE (TOFU if
     // empty). HTTP candidates resolve their own pubkey per-candidate.
-    let base_server_pub_key: Option<[u8; 32]> = if server_pubkey.is_empty() {
+    let base_server_pub_key = if server_pubkey.is_empty() {
         None
     } else {
-        let pub_bytes = STANDARD.decode(&server_pubkey).map_err(|_| {
-            "--server-pubkey must be a valid base64 string"
-        })?;
-        if pub_bytes.len() != 32 {
-            log::error!("--server-pubkey must be a base64-encoded Ed25519 public key (32 bytes)");
-            std::process::exit(2);
-        }
-        Some(pub_bytes.try_into().unwrap())
+        Some(decode_server_pubkey(&server_pubkey, suite).map_err(|e| format!("--server-pubkey: {e}"))?)
     };
 
     // Base config — server-specific fields (server_url, dial_addr, server_pub_key)
@@ -546,6 +581,7 @@ fn run(
         dispatcher,
         agent_version: env!("CARGO_PKG_VERSION").to_string(),
         encrypt: cli.encrypt,
+        text_response,
         pending_poll: Duration::from_secs(10),
         max_attempts: 0,
         max_network_failures: 3,
@@ -709,16 +745,38 @@ fn build_http_candidates(
     candidates
 }
 
+/// Decode a base64 server public key and check it belongs to `suite`. A key
+/// for the wrong suite could never verify a bundle this agent accepts, so it
+/// is reported up front rather than as a signature failure after approval.
+fn decode_server_pubkey(key_str: &str, suite: Suite) -> Result<sign::PublicKey> {
+    let key = sign::decode_public_key(key_str)?;
+    if key.suite() != suite {
+        return Err(format!(
+            "server public key is for the {} suite but --crypto-suite is {suite}",
+            key.suite()
+        )
+        .into());
+    }
+    Ok(key)
+}
+
 fn resolve_server_pubkey_for_candidate(
     candidate: &HttpCandidate,
     global_pubkey_str: &str,
     ca_file: Option<&std::path::Path>,
     insecure: bool,
-) -> Result<[u8; 32]> {
+    suite: Suite,
+) -> Result<sign::PublicKey> {
+    // mDNS advertises the server's default (Ed25519) key only, so a hint for
+    // another suite falls through to /v1/server-info.
+    let hint = candidate
+        .pubkey_hint
+        .as_deref()
+        .filter(|h| global_pubkey_str.is_empty() && decode_server_pubkey(h, suite).is_ok());
     let key_str: String = if !global_pubkey_str.is_empty() {
         global_pubkey_str.to_string()
-    } else if let Some(hint) = &candidate.pubkey_hint {
-        hint.clone()
+    } else if let Some(hint) = hint {
+        hint.to_string()
     } else {
         if ca_file.is_none() && !insecure {
             log::warn!(
@@ -732,25 +790,15 @@ fn resolve_server_pubkey_for_candidate(
             insecure || ca_file.is_none(),
             candidate.dial_addr.as_deref(),
         )?;
-        let fetched = transport::fetch_server_pubkey(&agent, &candidate.url).map_err(|e| {
+        let fetched = transport::fetch_server_pubkey(&agent, &candidate.url, suite).map_err(|e| {
             format!("fetch server pubkey from {}: {e}", candidate.url)
         })?;
         log::info!("fetched server pubkey from /v1/server-info url={}", candidate.url);
         fetched
     };
 
-    let pub_bytes = STANDARD.decode(&key_str).map_err(|_| {
-        format!("invalid server pubkey for {}: not valid base64", candidate.url)
-    })?;
-    if pub_bytes.len() != 32 {
-        return Err(format!(
-            "invalid server pubkey for {}: expected 32 bytes, got {}",
-            candidate.url,
-            pub_bytes.len()
-        )
-        .into());
-    }
-    Ok(pub_bytes.try_into().unwrap())
+    decode_server_pubkey(&key_str, suite)
+        .map_err(|e| format!("invalid server pubkey for {}: {e}", candidate.url).into())
 }
 
 fn run_http_candidates(
@@ -760,6 +808,7 @@ fn run_http_candidates(
     ca_file: Option<&std::path::Path>,
     insecure: bool,
 ) -> Result<()> {
+    let suite = base_cfg.identity.suite();
     if candidates.is_empty() {
         return Err(Box::new(enroll::ServerUnreachableError {
             attempts: 0,
@@ -772,6 +821,7 @@ fn run_http_candidates(
             global_pubkey_str,
             ca_file,
             insecure,
+            suite,
         ) {
             Ok(k) => k,
             Err(e) => {
@@ -1148,7 +1198,7 @@ mod tests {
     /// produce successful enrollment in the cancel test.
     fn build_minimal_base_cfg() -> enroll::Config {
         let tmp = tempfile::tempdir().unwrap();
-        let id = identity::Identity::load_or_create(&tmp.path().join("id.key")).unwrap();
+        let id = identity::Identity::load_or_create(&tmp.path().join("id.key"), Suite::Ed25519X25519).unwrap();
         let dispatcher = appliers::Dispatcher::new(tmp.path().to_path_buf());
         // tmp goes out of scope here; identity + dispatcher have already
         // captured what they need (file already created on disk for identity,
@@ -1166,6 +1216,7 @@ mod tests {
             dispatcher,
             agent_version: "test".to_string(),
             encrypt: false,
+            text_response: false,
             pending_poll: Duration::from_millis(10),
             max_attempts: 0,
             max_network_failures: 1,

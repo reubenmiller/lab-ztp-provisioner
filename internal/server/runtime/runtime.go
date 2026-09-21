@@ -13,6 +13,7 @@ package runtime
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
@@ -126,18 +127,44 @@ func Start(ctx context.Context, opts Options) (*Handle, error) {
 		return nil, fmt.Errorf("profile cumulocity issuer: %w", err)
 	}
 
+	defaultSuite, err := cfg.CryptoSuite()
+	if err != nil {
+		return nil, fmt.Errorf("default_crypto_suite: %w", err)
+	}
+	suiteWanted, err := p256Wanted(ctx, defaultSuite, resolver)
+	if err != nil {
+		return nil, err
+	}
+	// The P-256 bundle-signing key is only materialised when something asks
+	// for that suite, so a deployment that serves only Ed25519/X25519 devices
+	// never grows a second key file.
+	var signingKeyP256 *ecdsa.PrivateKey
+	if suiteWanted {
+		if signingKeyP256, err = cfg.LoadOrCreateP256SigningKey(); err != nil {
+			return nil, fmt.Errorf("p256 signing key: %w", err)
+		}
+		pubB64, err := protocol.EncodePublicKeyForSuite(&signingKeyP256.PublicKey, protocol.SuiteP256)
+		if err != nil {
+			return nil, err
+		}
+		logger.Info("p256 bundle signing key ready", "public_key", pubB64,
+			"file", cfg.P256SigningKeyPath())
+	}
+
 	hub := api.NewHub()
 	engine, err := server.NewEngine(server.EngineConfig{
-		Store:         st,
-		Verifiers:     verifiers,
-		Resolver:      resolver,
-		SigningKey:    signingKey,
-		SigningKeyID:  cfg.SigningKeyID,
-		ClockSkew:     cfg.ClockSkew,
-		Logger:        logger,
-		OnPending:     hub.Notify,
-		OnEnrolled:    hub.NotifyEnrolled,
-		OnKeyMismatch: hub.NotifyKeyMismatch,
+		Store:          st,
+		Verifiers:      verifiers,
+		Resolver:       resolver,
+		SigningKey:     signingKey,
+		SigningKeyP256: signingKeyP256,
+		SigningKeyID:   cfg.SigningKeyID,
+		DefaultSuite:   defaultSuite,
+		ClockSkew:      cfg.ClockSkew,
+		Logger:         logger,
+		OnPending:      hub.Notify,
+		OnEnrolled:     hub.NotifyEnrolled,
+		OnKeyMismatch:  hub.NotifyKeyMismatch,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: %w", err)
@@ -497,4 +524,33 @@ func buildEncryptionRecipients(id *age.X25519Identity, configured []string) []st
 		}
 	}
 	return out
+}
+
+// p256Wanted reports whether any profile — or the server default — selects the
+// P-256 suite, which is what decides whether the server needs a P-256 bundle
+// signing key at all.
+//
+// Profiles are hot-reloadable, so a profile added later that asks for P-256
+// would find no key. That is reported as a clear enrollment error by
+// Engine.signerFor rather than handled here, because generating key material
+// lazily on an enrollment request would make a device's first contact
+// responsible for creating a server secret.
+func p256Wanted(ctx context.Context, def protocol.Suite, resolver *profiles.Resolver) (bool, error) {
+	if def == protocol.SuiteP256 {
+		return true, nil
+	}
+	list, err := resolver.List(ctx)
+	if err != nil {
+		return false, fmt.Errorf("list profiles: %w", err)
+	}
+	for i := range list {
+		s, err := list[i].Suite(def)
+		if err != nil {
+			return false, err
+		}
+		if s == protocol.SuiteP256 {
+			return true, nil
+		}
+	}
+	return false, nil
 }

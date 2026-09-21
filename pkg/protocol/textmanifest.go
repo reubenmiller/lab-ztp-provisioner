@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
@@ -92,15 +93,25 @@ func BuildTextManifest(b *ProvisioningBundle) ([]byte, error) {
 // carries the base64-encoded text bytes (i.e. the SAME bytes the agent will
 // verify and parse).
 func SignTextManifest(bundle *ProvisioningBundle, priv ed25519.PrivateKey, keyID string) (*SignedEnvelope, error) {
+	return SignTextManifestWithSuite(bundle, priv, keyID, SuiteEd25519X25519)
+}
+
+// SignTextManifestWithSuite signs the manifest under an explicit suite. Unlike
+// SignWithSuite it does not canonicalise: BuildTextManifest is already
+// deterministic, and its bytes are the signature input verbatim.
+func SignTextManifestWithSuite(bundle *ProvisioningBundle, key crypto.Signer, keyID string, suite Suite) (*SignedEnvelope, error) {
 	body, err := BuildTextManifest(bundle)
 	if err != nil {
 		return nil, err
 	}
-	sig := ed25519.Sign(priv, body)
+	sig, err := signCanonical(body, key, suite)
+	if err != nil {
+		return nil, err
+	}
 	return &SignedEnvelope{
 		ProtocolVersion: Version,
 		KeyID:           keyID,
-		Algorithm:       "ed25519",
+		Algorithm:       suite.SignAlg(),
 		Payload:         base64.StdEncoding.EncodeToString(body),
 		Signature:       base64.StdEncoding.EncodeToString(sig),
 	}, nil

@@ -66,7 +66,6 @@ impl std::error::Error for BleCancelledError {}
 
 #[cfg(all(feature = "ble", target_os = "linux"))]
 mod imp {
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
     use bluer::{
         adv::{Advertisement, Type as AdvType},
         gatt::{
@@ -112,10 +111,7 @@ mod imp {
         let device_id = crate::enroll::resolve_device_id(&cfg.device_id)?;
         log::info!("enrolling device device_id={device_id}");
 
-        let server_pub: Option<ed25519_dalek::VerifyingKey> = cfg.server_pub_key
-            .as_ref()
-            .map(|k| crate::sign::decode_public_key(&STANDARD.encode(k)))
-            .transpose()?;
+        let server_pub = cfg.server_pub_key.clone();
 
         // clock_offset_ns stores the running clock correction from either
         // the TimeSyncUUID write (Option 3) or a server rejection
@@ -131,16 +127,17 @@ mod imp {
         rt.block_on(serve(cfg, device_id, server_pub, clock_offset_ns, cancel))
     }
 
-    /// Build a fresh enroll envelope + ephemeral X25519 key pair.
+    /// Build a fresh enroll envelope + ephemeral key pair (X25519 or P-256,
+    /// following the identity's crypto suite).
     fn make_envelope(
         cfg: &crate::enroll::Config,
         device_id: &str,
         clock_offset: chrono::Duration,
-    ) -> crate::Result<(Vec<u8>, [u8; 32])> {
+    ) -> crate::Result<(Vec<u8>, crate::encrypt::EphemeralKey)> {
         let mut cfg_with_offset = cfg.clone();
         cfg_with_offset.clock_offset = clock_offset;
-        let (eph_priv, eph_pub) = crate::encrypt::generate_x25519()?;
-        let req = crate::enroll::build_request(device_id, &cfg_with_offset, &STANDARD.encode(eph_pub));
+        let eph_priv = crate::encrypt::EphemeralKey::generate(cfg.identity.suite())?;
+        let req = crate::enroll::build_request(device_id, &cfg_with_offset, &eph_priv);
         let env = crate::sign::sign(&req, cfg.identity.signing_key(), "device")?;
         let env_json = serde_json::to_vec(&env)
             .map_err(|e| format!("marshal enroll envelope: {e}"))?;
@@ -159,7 +156,7 @@ mod imp {
     async fn serve(
         cfg: &crate::enroll::Config,
         device_id: String,
-        server_pub: Option<ed25519_dalek::VerifyingKey>,
+        server_pub: Option<crate::sign::PublicKey>,
         clock_offset_ns: std::sync::Arc<std::sync::atomic::AtomicI64>,
         cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) -> crate::Result<()> {
@@ -378,15 +375,17 @@ mod imp {
                                 log::info!("BLE phase 2: received server response, applying bundle");
                                 // Deserialise first so we can detect rejection and retry
                                 // without dying, rather than returning a hard error.
-                                let resp_result: Result<crate::wire::EnrollResponse, _> =
-                                    serde_json::from_slice(&req);
+                                // JSON, or the text rendering when the request
+                                // set response_format: the relay forwards the
+                                // server's body verbatim.
+                                let resp_result = crate::textmanifest::decode_enroll_response(&req);
                                 match resp_result {
                                     Err(e) => {
                                         log::error!("BLE phase 2: decode server response: {e}");
                                         if let Some(sw) = stat_writer.as_mut() {
                                             sw.write_all(&[STATUS_ERROR]).await.ok();
                                         }
-                                        return Err(format!("decode server response JSON: {e}").into());
+                                        return Err(format!("decode server response: {e}").into());
                                     }
                                     Ok(ref resp)
                                         if matches!(

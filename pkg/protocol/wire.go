@@ -29,12 +29,45 @@ type EnrollRequest struct {
 	// transport itself is untrusted (e.g. a BLE relay). Independent of
 	// per-module sealing, which the server applies whenever it has a
 	// sensitive payload AND EphemeralX25519 is present.
-	EncryptBundle  bool              `json:"encrypt_bundle,omitempty"`
+	EncryptBundle bool `json:"encrypt_bundle,omitempty"`
+
+	// EphemeralP256 is the SuiteP256 counterpart of EphemeralX25519: a
+	// base64 uncompressed P-256 point used for key agreement when sealing.
+	// A device sends whichever field matches the suite it signs with.
+	EphemeralP256 string `json:"ephemeral_p256,omitempty"`
+
+	// ResponseFormat asks the server for a particular bundle representation.
+	// "" and "json" give the usual JSON EnrollResponse; "text" gives the
+	// line-based manifest (the same one `Accept: text/plain` selects over
+	// HTTP), which a device can parse without a JSON parser. It exists for
+	// transports with no content negotiation of their own — notably the BLE
+	// relay, where the request reaches the server inside a signed envelope
+	// rather than as an HTTP request the device controls.
+	ResponseFormat string `json:"response_format,omitempty"`
+
+	// MaxResponseBytes, when non-zero, is the largest response the device can
+	// buffer. A device with a fixed-size receive buffer sets it so that an
+	// oversized bundle comes back as a clean rejection it can report, instead
+	// of a truncated write it would have to detect.
+	MaxResponseBytes int `json:"max_response_bytes,omitempty"`
+
 	BootstrapToken string            `json:"bootstrap_token,omitempty"`
 	Facts          DeviceFacts       `json:"facts"`
 	Capabilities   []string          `json:"capabilities,omitempty"` // module types the device supports
 	Metadata       map[string]string `json:"metadata,omitempty"`
 }
+
+// EphemeralKey returns the device's key-agreement public key for the given
+// suite, and whether it was supplied.
+func (r *EnrollRequest) EphemeralKey(suite Suite) (string, bool) {
+	if suite == SuiteP256 {
+		return r.EphemeralP256, r.EphemeralP256 != ""
+	}
+	return r.EphemeralX25519, r.EphemeralX25519 != ""
+}
+
+// WantsText reports whether the device asked for the line-based manifest.
+func (r *EnrollRequest) WantsText() bool { return r.ResponseFormat == "text" }
 
 // DeviceFacts is the operator-visible identity surface of a device. It is what
 // shows up in the "pending approval" list of the web UI.
@@ -103,6 +136,10 @@ type EnrollResponse struct {
 	// (it would just duplicate Bundle) and rendered only when the client
 	// asks for `Accept: text/plain`.
 	TextManifest *SignedEnvelope `json:"-"`
+	// WantsText mirrors EnrollRequest.ResponseFormat back to the transport
+	// layer, which is what actually chooses a rendering. It is not part of
+	// the wire format: the device already knows what it asked for.
+	WantsText bool `json:"-"`
 	// ServerTime is the server's UTC clock at the time of the response.
 	// Devices whose clocks are not yet synced (e.g. before NTP via a
 	// newly-provisioned network) can compute a correction offset from this

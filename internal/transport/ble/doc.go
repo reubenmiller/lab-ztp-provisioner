@@ -20,6 +20,29 @@
 //
 // Both ends frame messages as: 2-byte big-endian length, payload bytes,
 // repeated until length == 0 (end of message).
+//
+// # Constrained peripherals
+//
+// The peripheral does not have to be a Linux box running the Go agent. A
+// microcontroller can serve this same GATT layout, and two protocol options
+// exist so that it can do so without a JSON parser or a second crypto stack:
+//
+//   - EnrollRequest.ResponseFormat = "text" asks the server for the
+//     line-based manifest from pkg/protocol/textmanifest.go instead of a JSON
+//     EnrollResponse. Over HTTP the shell agent selects it with
+//     `Accept: text/plain`; a BLE device has no HTTP request of its own to
+//     negotiate with, because the relay POSTs on its behalf, so it asks
+//     inside the signed request instead.
+//
+//   - The "p256" crypto suite (per-profile, see protocol.Suite) signs with
+//     ecdsa-p256-sha256 and seals with p256-hkdf-sha256-chacha20poly1305.
+//     Mbed TLS, which is what Zephyr's PSA stack is, has no Ed25519. Such a
+//     device sends EnrollRequest.EphemeralP256 rather than EphemeralX25519.
+//
+// A device with a fixed receive buffer should also set
+// EnrollRequest.MaxResponseBytes, so an oversized bundle comes back as a
+// rejection with a reason rather than a write it would have to detect as
+// truncated.
 package ble
 
 import "errors"

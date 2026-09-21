@@ -80,8 +80,13 @@ impl ureq::Resolver for MdnsResolver {
     }
 }
 
-/// GET /v1/server-info and return the base64-encoded Ed25519 public key.
-pub fn fetch_server_pubkey(agent: &ureq::Agent, server_url: &str) -> crate::Result<String> {
+/// GET /v1/server-info and return the base64-encoded bundle-signing public
+/// key for `suite`: `public_key` (Ed25519) or `public_key_p256`.
+pub fn fetch_server_pubkey(
+    agent: &ureq::Agent,
+    server_url: &str,
+    suite: crate::suite::Suite,
+) -> crate::Result<String> {
     let url = format!("{server_url}/v1/server-info");
     let resp = agent
         .get(&url)
@@ -91,15 +96,27 @@ pub fn fetch_server_pubkey(agent: &ureq::Agent, server_url: &str) -> crate::Resu
     #[derive(serde::Deserialize)]
     struct ServerInfo {
         public_key: String,
+        #[serde(default)]
+        public_key_p256: String,
     }
     let info: ServerInfo = resp
         .into_json()
         .map_err(|e| format!("decode /v1/server-info: {e}"))?;
 
-    if info.public_key.is_empty() {
-        return Err("/v1/server-info: empty public_key field".into());
+    match suite {
+        crate::suite::Suite::Ed25519X25519 if info.public_key.is_empty() => {
+            Err("/v1/server-info: empty public_key field".into())
+        }
+        crate::suite::Suite::Ed25519X25519 => Ok(info.public_key),
+        // The server only creates a P-256 key once some profile (or its
+        // default) selects the p256 suite.
+        crate::suite::Suite::P256 if info.public_key_p256.is_empty() => Err(
+            "/v1/server-info: no public_key_p256 — the server has no P-256 signing key \
+             (no profile selects crypto.suite: p256)"
+                .into(),
+        ),
+        crate::suite::Suite::P256 => Ok(info.public_key_p256),
     }
-    Ok(info.public_key)
 }
 
 /// POST /v1/enroll with `env` and return the parsed `EnrollResponse`.
@@ -110,20 +127,29 @@ pub fn post_enroll(
 ) -> crate::Result<EnrollResponse> {
     let url = format!("{server_url}/v1/enroll");
     let body = serde_json::to_string(env)?;
-    let resp = agent
+    let result = agent
         .post(&url)
         .set("Content-Type", "application/json")
-        .send_string(&body)
-        .map_err(|e| format!("POST {url}: {e}"))?;
+        .send_string(&body);
 
-    let status = resp.status();
-    let text = resp.into_string()?;
+    let (status, text) = match result {
+        Ok(resp) => (resp.status(), resp.into_string()?),
+        // The server answers a rejection with 403 and malformed input with
+        // 400, both with an EnrollResponse body carrying the reason (and
+        // server_time for clock-skew correction). ureq 2 reports any 4xx/5xx
+        // as an error, so recover the body instead of treating it as a
+        // network failure.
+        Err(ureq::Error::Status(code, resp)) => (code, resp.into_string()?),
+        Err(e) => return Err(format!("POST {url}: {e}").into()),
+    };
 
     if status >= 500 {
         return Err(format!("server error {status}: {text}").into());
     }
 
-    serde_json::from_str(&text).map_err(|e| format!("decode enroll response: {e}").into())
+    // JSON, or the text rendering when the request set response_format.
+    crate::textmanifest::decode_enroll_response(text.as_bytes())
+        .map_err(|e| format!("POST {url}: HTTP {status}: {e}").into())
 }
 
 /// TCP-probe a server URL (3-second timeout), returning true if connectable.

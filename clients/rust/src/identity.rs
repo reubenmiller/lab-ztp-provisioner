@@ -1,49 +1,60 @@
-//! Ed25519 identity key — mirrors internal/agent/identity/identity.go.
+//! Device identity key — mirrors internal/agent/identity/identity.go.
 //!
-//! File format: base64-encoded 64-byte Ed25519 private key (Go format):
-//!   bytes[0..32] = 32-byte seed
-//!   bytes[32..64] = 32-byte public key (= seed's derived public key)
+//! File format depends on the key's crypto suite; it is detected on load:
+//! - Ed25519: base64-encoded 64-byte Ed25519 private key (Go format):
+//!     bytes[0..32] = 32-byte seed
+//!     bytes[32..64] = 32-byte public key (= seed's derived public key)
+//! - P-256: base64-encoded PKCS#8 DER (the same shape the server uses for its
+//!   own P-256 signing key, and readable with `openssl pkey -inform DER`).
+//!
+//! The suite is fixed when the key is created. Loading a key of a different
+//! suite than requested is an error rather than a silent switch: the server
+//! identifies the device by this key, so changing suite is a re-identity.
 //!
 //! File permissions: 0o600 (read/write owner only).
 //! Parent directory created with 0o700 if missing.
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use ed25519_dalek::{SigningKey, VerifyingKey};
+use p256::pkcs8::{DecodePrivateKey, EncodePrivateKey};
 use std::path::Path;
+
+use crate::sign::{PrivateKey, PublicKey};
+use crate::suite::Suite;
 
 #[derive(Clone)]
 pub struct Identity {
-    signing_key: SigningKey,
+    signing_key: PrivateKey,
 }
 
 impl Identity {
-    /// Load or create an identity key at `path`.
-    pub fn load_or_create(path: &Path) -> crate::Result<Self> {
+    /// Load the identity key at `path`, or create one for `suite` if absent.
+    pub fn load_or_create(path: &Path, suite: Suite) -> crate::Result<Self> {
         match std::fs::read(path) {
             Ok(contents) => {
                 let raw = STANDARD.decode(contents.trim_ascii())?;
-                if raw.len() != 64 {
+                let signing_key = decode_key(&raw)
+                    .map_err(|e| format!("identity key at {}: {e}", path.display()))?;
+                if signing_key.suite() != suite {
                     return Err(format!(
-                        "identity key at {}: expected 64 bytes, got {}",
+                        "identity key at {} is for the {} crypto suite but {} was requested; \
+                         remove the key (the device will re-enroll as a new identity) \
+                         or select the matching suite",
                         path.display(),
-                        raw.len()
+                        signing_key.suite(),
+                        suite
                     )
                     .into());
                 }
-                // Go format: first 32 bytes = seed
-                let seed: [u8; 32] = raw[..32].try_into().unwrap();
-                Ok(Self {
-                    signing_key: SigningKey::from_bytes(&seed),
-                })
+                Ok(Self { signing_key })
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                Self::create_new(path)
+                Self::create_new(path, suite)
             }
             Err(e) => Err(e.into()),
         }
     }
 
-    fn create_new(path: &Path) -> crate::Result<Self> {
+    fn create_new(path: &Path, suite: Suite) -> crate::Result<Self> {
         // Create parent directory with 0o700
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -51,14 +62,20 @@ impl Identity {
             }
         }
 
-        let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
-        let seed = signing_key.as_bytes(); // 32-byte seed
-        let pub_bytes = signing_key.verifying_key().to_bytes(); // 32-byte pub
-
-        // Construct 64-byte Go-format private key: seed || pubkey
-        let mut raw = [0u8; 64];
-        raw[..32].copy_from_slice(seed);
-        raw[32..].copy_from_slice(&pub_bytes);
+        let signing_key = PrivateKey::generate(suite);
+        let raw: Vec<u8> = match &signing_key {
+            PrivateKey::Ed25519(k) => {
+                // 64-byte Go-format private key: seed || pubkey
+                let mut raw = k.as_bytes().to_vec();
+                raw.extend_from_slice(&k.verifying_key().to_bytes());
+                raw
+            }
+            PrivateKey::P256(k) => p256::SecretKey::from(*k.as_nonzero_scalar())
+                .to_pkcs8_der()
+                .map_err(|e| format!("encode P-256 identity key: {e}"))?
+                .as_bytes()
+                .to_vec(),
+        };
 
         let encoded = STANDARD.encode(raw);
         write_file_secure(path, encoded.as_bytes())?;
@@ -66,13 +83,35 @@ impl Identity {
         Ok(Self { signing_key })
     }
 
-    pub fn signing_key(&self) -> &SigningKey {
+    pub fn signing_key(&self) -> &PrivateKey {
         &self.signing_key
     }
 
-    pub fn verifying_key(&self) -> VerifyingKey {
-        self.signing_key.verifying_key()
+    pub fn public_key(&self) -> PublicKey {
+        self.signing_key.public_key()
     }
+
+    pub fn suite(&self) -> Suite {
+        self.signing_key.suite()
+    }
+}
+
+/// Decode an identity file's bytes: exactly 64 bytes is the Go Ed25519 format,
+/// anything else must be a PKCS#8 P-256 key.
+fn decode_key(raw: &[u8]) -> crate::Result<PrivateKey> {
+    if raw.len() == 64 {
+        let seed: [u8; 32] = raw[..32].try_into().unwrap();
+        return Ok(ed25519_dalek::SigningKey::from_bytes(&seed).into());
+    }
+    p256::ecdsa::SigningKey::from_pkcs8_der(raw)
+        .map(PrivateKey::P256)
+        .map_err(|e| {
+            format!(
+                "expected a 64-byte Ed25519 key or a PKCS#8 P-256 key ({} bytes, {e})",
+                raw.len()
+            )
+            .into()
+        })
 }
 
 #[cfg(unix)]
@@ -119,19 +158,39 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("identity.key");
 
-        let id1 = Identity::load_or_create(&path).unwrap();
-        let pub1 = id1.verifying_key();
+        let id1 = Identity::load_or_create(&path, Suite::Ed25519X25519).unwrap();
+        let pub1 = id1.public_key();
 
         // Second call should load the same key
-        let id2 = Identity::load_or_create(&path).unwrap();
-        assert_eq!(id2.verifying_key().as_bytes(), pub1.as_bytes());
+        let id2 = Identity::load_or_create(&path, Suite::Ed25519X25519).unwrap();
+        assert_eq!(id2.public_key(), pub1);
+    }
+
+    #[test]
+    fn create_and_reload_p256() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("identity.key");
+
+        let id1 = Identity::load_or_create(&path, Suite::P256).unwrap();
+        assert_eq!(id1.suite(), Suite::P256);
+        let id2 = Identity::load_or_create(&path, Suite::P256).unwrap();
+        assert_eq!(id2.public_key(), id1.public_key());
+    }
+
+    #[test]
+    fn suite_mismatch_is_an_error() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("identity.key");
+        Identity::load_or_create(&path, Suite::Ed25519X25519).unwrap();
+        let err = Identity::load_or_create(&path, Suite::P256).err().unwrap();
+        assert!(err.to_string().contains("ed25519-x25519"), "{err}");
     }
 
     #[test]
     fn creates_parent_dir() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("subdir").join("nested").join("identity.key");
-        Identity::load_or_create(&path).unwrap();
+        Identity::load_or_create(&path, Suite::Ed25519X25519).unwrap();
         assert!(path.exists());
     }
 }

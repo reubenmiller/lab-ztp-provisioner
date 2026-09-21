@@ -2,7 +2,11 @@
 package config
 
 import (
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -13,6 +17,8 @@ import (
 
 	"filippo.io/age"
 	"gopkg.in/yaml.v3"
+
+	"github.com/thin-edge/tedge-zerotouch-provisioning/pkg/protocol"
 )
 
 // Config is the YAML-loaded server configuration.
@@ -30,6 +36,18 @@ type Config struct {
 	SigningKey     string `yaml:"signing_key"`      // base64 Ed25519 priv (inline; takes precedence over file)
 	SigningKeyFile string `yaml:"signing_key_file"` // path to a base64 Ed25519 priv key; created on first start
 	SigningKeyID   string `yaml:"signing_key_id"`
+
+	// DefaultCryptoSuite is the algorithm suite used for profiles that do
+	// not select one. Empty means protocol.DefaultSuite (Ed25519/X25519),
+	// which is what every existing agent speaks — so leaving this unset
+	// keeps a deployment's behaviour unchanged.
+	DefaultCryptoSuite string `yaml:"default_crypto_suite"`
+
+	// SigningKeyP256File is the P-256 counterpart of SigningKeyFile, used to
+	// sign bundles for profiles on the "p256" suite. It is created on first
+	// use rather than at startup, so a deployment that serves no P-256
+	// profile never generates one. Defaults to "<signing_key_file>.p256".
+	SigningKeyP256File string `yaml:"signing_key_p256_file"`
 
 	// AgeKey is the inline AGE-SECRET-KEY-… string used to decrypt
 	// SOPS-age sealed profile files. Takes precedence over AgeKeyFile.
@@ -286,6 +304,84 @@ func (c *Config) WritePublicKey(pubB64 string) error {
 // New callers should prefer LoadOrCreateSigningKey.
 func (c *Config) SigningKeyOrGenerate() (ed25519.PrivateKey, error) {
 	return c.LoadOrCreateSigningKey()
+}
+
+// P256SigningKeyPath is where the P-256 bundle-signing key lives: the
+// configured path, or "<signing_key_file>.p256" beside the Ed25519 key.
+// Empty when the server has no key directory at all (in-memory dev runs),
+// in which case the key is ephemeral.
+func (c *Config) P256SigningKeyPath() string {
+	if c.SigningKeyP256File != "" {
+		return c.SigningKeyP256File
+	}
+	if c.SigningKeyFile == "" {
+		return ""
+	}
+	return c.SigningKeyFile + ".p256"
+}
+
+// LoadOrCreateP256SigningKey returns the server's P-256 bundle-signing key,
+// reading it from P256SigningKeyPath and generating+persisting one on first
+// use. It mirrors LoadOrCreateSigningKey's auto-bootstrap behaviour, including
+// writing the public key to "<file>.pub" so an operator can pin it on devices.
+//
+// The key is PKCS#8 DER, base64-encoded, so the file is the same shape (a
+// single base64 line, mode 0600) as the Ed25519 one.
+func (c *Config) LoadOrCreateP256SigningKey() (*ecdsa.PrivateKey, error) {
+	path := c.P256SigningKeyPath()
+	if path != "" {
+		b, err := os.ReadFile(path)
+		switch {
+		case err == nil:
+			der, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(b)))
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", path, err)
+			}
+			key, err := x509.ParsePKCS8PrivateKey(der)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", path, err)
+			}
+			priv, ok := key.(*ecdsa.PrivateKey)
+			if !ok || priv.Curve != elliptic.P256() {
+				return nil, fmt.Errorf("%s: not a P-256 private key", path)
+			}
+			return priv, nil
+		case !os.IsNotExist(err):
+			return nil, err
+		}
+	}
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	if path == "" {
+		return priv, nil
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	enc := base64.StdEncoding.EncodeToString(der)
+	if err := os.WriteFile(path, []byte(enc), 0o600); err != nil {
+		return nil, fmt.Errorf("write %s: %w", path, err)
+	}
+	pubB64, err := protocol.EncodePublicKeyForSuite(&priv.PublicKey, protocol.SuiteP256)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(path+".pub", []byte(pubB64+"\n"), 0o644); err != nil {
+		return nil, fmt.Errorf("write %s.pub: %w", path, err)
+	}
+	return priv, nil
+}
+
+// CryptoSuite resolves the server-wide default suite.
+func (c *Config) CryptoSuite() (protocol.Suite, error) {
+	return protocol.ParseSuite(c.DefaultCryptoSuite)
 }
 
 // LoadOrCreateAgeKey returns the server's age identity, in order of

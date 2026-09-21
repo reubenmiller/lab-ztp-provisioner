@@ -21,9 +21,11 @@
 package profiles
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/server/payload"
+	"github.com/thin-edge/tedge-zerotouch-provisioning/pkg/protocol"
 )
 
 // Source identifies where a profile came from. Used by the API + UI to
@@ -64,6 +66,14 @@ type Profile struct {
 	// pre-profile top-level `payload:` block.
 	Payload *payload.Set `json:"payload,omitempty" yaml:"payload,omitempty"`
 
+	// Crypto selects the algorithm suite used to sign and seal bundles for
+	// devices on this profile. Omitted means the server's configured default,
+	// which is itself the original Ed25519/X25519 suite unless an operator
+	// changes it. It lives per-profile because the reason to change it is a
+	// device population, not a deployment: a fleet of microcontrollers needs
+	// a different suite from a fleet of Linux boxes served by the same server.
+	Crypto *CryptoOptions `json:"crypto,omitempty" yaml:"crypto,omitempty"`
+
 	// Source is set by the loader; it is not read from YAML.
 	Source Source `json:"source" yaml:"-"`
 
@@ -71,6 +81,32 @@ type Profile struct {
 	// profiles, UpdatedAt is the file's mtime and UpdatedBy is "file".
 	UpdatedAt time.Time `json:"updated_at,omitempty" yaml:"-"`
 	UpdatedBy string    `json:"updated_by,omitempty" yaml:"-"`
+}
+
+// CryptoOptions selects the algorithm suite for a profile's devices.
+type CryptoOptions struct {
+	// Suite is "ed25519-x25519" (the default) or "p256". See
+	// protocol.Suite for what each one means and why the second exists.
+	Suite string `json:"suite,omitempty" yaml:"suite,omitempty"`
+}
+
+// Suite resolves the profile's suite, falling back to def when the profile
+// does not select one. An unparseable value is an operator error and is
+// returned as such rather than silently defaulted — a profile that asks for a
+// suite the server does not know would otherwise serve the wrong algorithms
+// to a fleet that cannot verify them.
+func (p *Profile) Suite(def protocol.Suite) (protocol.Suite, error) {
+	if p == nil || p.Crypto == nil || p.Crypto.Suite == "" {
+		if def == "" {
+			return protocol.DefaultSuite, nil
+		}
+		return def, nil
+	}
+	s, err := protocol.ParseSuite(p.Crypto.Suite)
+	if err != nil {
+		return "", fmt.Errorf("profile %q: %w", p.Name, err)
+	}
+	return s, nil
 }
 
 // Selector matches a profile against a device's facts. All non-empty

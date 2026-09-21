@@ -1,6 +1,6 @@
 // build.rs — generate cross-language test vectors before compilation.
 //
-// Runs `go test -run TestGenerateVectors ./pkg/protocol` from the repo root so
+// Runs the `TestGenerate*Vectors` tests in ./pkg/protocol from the repo root so
 // that testdata/vectors/*.json exist for the integration tests in
 // tests/protocol_vectors.rs.
 //
@@ -17,7 +17,8 @@ fn main() {
     let repo_root = PathBuf::from(&manifest_dir).join("../..");
 
     let status = Command::new("go")
-        .args(["test", "-run", "TestGenerateVectors", "./pkg/protocol"])
+        // Matches TestGenerateVectors and TestGenerateP256Vectors.
+        .args(["test", "-run", "^TestGenerate.*Vectors$", "./pkg/protocol"])
         .current_dir(&repo_root)
         .status();
 

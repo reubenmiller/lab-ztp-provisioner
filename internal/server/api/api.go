@@ -205,7 +205,11 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	if resp.Status == protocol.StatusRejected {
 		status = http.StatusForbidden
 	}
-	if wantsTextPlain(r) {
+	// A device can ask for the text manifest either through HTTP content
+	// negotiation or, when it has no control over the HTTP request — a BLE
+	// relay POSTs on its behalf — through response_format in the signed
+	// request itself.
+	if resp.WantsText || wantsTextPlain(r) {
 		writeEnrollText(w, status, resp)
 		return
 	}
@@ -271,54 +275,7 @@ func wantsTextPlain(r *http.Request) bool {
 func writeEnrollText(w http.ResponseWriter, status int, resp *protocol.EnrollResponse) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(status)
-
-	writeKV := func(k, v string) {
-		// Strip CR/LF from values so each record stays on one line.
-		v = strings.ReplaceAll(v, "\n", `\n`)
-		v = strings.ReplaceAll(v, "\r", `\r`)
-		_, _ = w.Write([]byte(k + "=" + v + "\n"))
-	}
-	writeKV("protocol_version", resp.ProtocolVersion)
-	writeKV("status", string(resp.Status))
-	if resp.Reason != "" {
-		writeKV("reason", resp.Reason)
-	}
-	if resp.RetryAfter > 0 {
-		writeKV("retry_after", itoa(resp.RetryAfter))
-	}
-	if resp.Bundle != nil {
-		writeKV("bundle.alg", resp.Bundle.Algorithm)
-		writeKV("bundle.key_id", resp.Bundle.KeyID)
-		writeKV("bundle.payload", resp.Bundle.Payload)
-		writeKV("bundle.signature", resp.Bundle.Signature)
-	}
-	if resp.TextManifest != nil {
-		writeKV("manifest.alg", resp.TextManifest.Algorithm)
-		writeKV("manifest.key_id", resp.TextManifest.KeyID)
-		writeKV("manifest.payload", resp.TextManifest.Payload)
-		writeKV("manifest.signature", resp.TextManifest.Signature)
-	}
-	if resp.EncryptedBundle != nil {
-		writeKV("encrypted.alg", resp.EncryptedBundle.Algorithm)
-		writeKV("encrypted.server_key", resp.EncryptedBundle.ServerKey)
-		writeKV("encrypted.nonce", resp.EncryptedBundle.Nonce)
-		writeKV("encrypted.ciphertext", resp.EncryptedBundle.Ciphertext)
-	}
-}
-
-func itoa(n int) string {
-	// Avoid pulling in strconv just for this; n is always small and non-negative.
-	if n == 0 {
-		return "0"
-	}
-	var b [20]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(b[i:])
+	_, _ = w.Write(protocol.MarshalEnrollText(resp))
 }
 
 // --- Admin: pending ------------------------------------------------------
