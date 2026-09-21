@@ -54,8 +54,9 @@ There are **two extra agent implementations** that speak the same wire protocol:
 
 - [wire.go](pkg/protocol/wire.go) — `EnrollRequest`, `EnrollResponse`, `SignedEnvelope`, `Module` types.
 - [canonical.go](pkg/protocol/canonical.go) — JCS canonical-JSON for signature input.
-- [sign.go](pkg/protocol/sign.go) — Ed25519 envelope signing/verification.
-- [encrypt.go](pkg/protocol/encrypt.go) — X25519 + ChaCha20-Poly1305 (used for both whole-bundle e2e encryption and per-module sealing).
+- [sign.go](pkg/protocol/sign.go) — envelope signing/verification: Ed25519, and ECDSA P-256 (raw `r‖s`, uncompressed points — the forms PSA emits).
+- [encrypt.go](pkg/protocol/encrypt.go) — X25519 + ChaCha20-Poly1305 (used for both whole-bundle e2e encryption and per-module sealing), plus the P-256 + HKDF-SHA256 + ChaCha20-Poly1305 variant.
+- [suite.go](pkg/protocol/suite.go) — the `Suite` type. `ed25519-x25519` is the default and what every shipped agent speaks; `p256` exists because Mbed TLS (and so Zephyr's PSA stack) has no Ed25519, and a microcontroller whose flash is already full cannot carry a second curve. Selected **per profile** (`crypto: {suite: p256}`), because the reason to change it is a device population, not a deployment.
 - [textmanifest.go](pkg/protocol/textmanifest.go) — line-oriented `key=value` / `module=<type> <base64>` form for the shell agent.
 
 ### Server engine — composable interfaces
@@ -98,7 +99,8 @@ The server is intentionally a thin orchestrator over five small interfaces. Defa
 
 ## Conventions worth knowing
 
-- **The wire protocol is the contract.** When changing anything in [pkg/protocol/](pkg/protocol/), regenerate test vectors via `go test ./pkg/protocol/...` and verify both Rust ([clients/rust/tests/protocol_vectors.rs](clients/rust/tests/protocol_vectors.rs)) and POSIX shell ([scripts/agent/ztp-agent.sh](scripts/agent/ztp-agent.sh)) still parse them.
+- **The wire protocol is the contract.** When changing anything in [pkg/protocol/](pkg/protocol/), regenerate test vectors via `go test ./pkg/protocol/...` and verify both Rust ([clients/rust/tests/protocol_vectors.rs](clients/rust/tests/protocol_vectors.rs)) and POSIX shell ([scripts/agent/ztp-agent.sh](scripts/agent/ztp-agent.sh)) still parse them. New optional fields must be `omitempty`: canonical JSON is the signing input, so a field that serialises when empty changes the bytes every existing agent signs.
+- **Crypto suites are additive, never a flag day.** The Go, Rust and shell agents implement `ed25519-x25519` only, and nothing asks them to change. A profile opts a device population into `p256`; `testdata/vectors/{sign,seal}_p256.json` pin that suite for implementations outside this repo. Inbound envelopes are verified by their own `alg` (never by the profile's suite — the profile is only resolved after the request is authentic).
 - **Module versioning is in the type name.** `wifi.v2`, `c8y.v2`, `passwd.v2` etc. — bumping a module is a new type string, both agent and server stay backwards-compatible because the dispatcher silently `skipped`s unknown types. The historical v1 (JSON) variants were removed; the server now emits only v2 (INI) payloads consumed by the `*.v2.sh` appliers under [scripts/appliers/](scripts/appliers/). Older agents whose appliers only handle `*.v1.sh` will silently skip everything until upgraded.
 - **Sensitive vs. non-sensitive payloads.** Anything a `PayloadProvider` flags `Sensitive: true` is sealed per-module to the device's ephemeral X25519 key; the engine **rejects enrollment** rather than issue a sensitive module to a device that didn't send `EphemeralX25519`. Plaintext lives only in the issuer's HTTP response, the provider stack frame, and the device's RAM.
 - **Profile resolution precedence is fixed** (see [internal/server/profiles/resolver.go](internal/server/profiles/resolver.go)) and audited; the device-supplied `metadata.profile` hint is advisory only and the audit log records `requested_honoured=true|false` whenever the hint was sent.

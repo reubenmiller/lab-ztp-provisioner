@@ -10,6 +10,8 @@ package server
 
 import (
 	"context"
+	"crypto"
+	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
@@ -36,6 +38,16 @@ type EngineConfig struct {
 	Resolver     *profiles.Resolver
 	SigningKey   ed25519.PrivateKey
 	SigningKeyID string
+
+	// SigningKeyP256 signs bundles for profiles on protocol.SuiteP256. It may
+	// be nil: a deployment that serves no P-256 profile never needs one, and
+	// an enrollment that would require it fails with a clear error rather
+	// than silently falling back to an algorithm the device cannot verify.
+	SigningKeyP256 *ecdsa.PrivateKey
+
+	// DefaultSuite is used for profiles that do not select one. The zero
+	// value means protocol.DefaultSuite.
+	DefaultSuite protocol.Suite
 	NonceTTL     time.Duration
 	BundleTTL    time.Duration
 	ClockSkew    time.Duration
@@ -163,7 +175,12 @@ func (e *Engine) parseAndVerify(ctx context.Context, env *protocol.SignedEnvelop
 	if err != nil {
 		return nil, err
 	}
-	pub, err := protocol.DecodePublicKey(peek.PublicKey)
+	// The key type follows the envelope's algorithm, so a device signs with
+	// whichever suite it implements and the server verifies accordingly. This
+	// is deliberately NOT gated on the profile: the profile is only resolved
+	// after the request is authentic, and a device cannot be asked to change
+	// algorithm retroactively.
+	pub, err := protocol.DecodePublicKeyForAlg(peek.PublicKey, env.Algorithm)
 	if err != nil {
 		return nil, fmt.Errorf("invalid public key: %w", err)
 	}
@@ -297,15 +314,25 @@ func (e *Engine) issueBundle(ctx context.Context, req *protocol.EnrollRequest, r
 	if err != nil {
 		return nil, fmt.Errorf("build payloads: %w", err)
 	}
-	_ = profile // currently only name/source surfaced; full struct kept for future use
+	// The profile chooses the algorithm suite for this device population, so
+	// a fleet of constrained devices can be served P-256 while everything
+	// else stays on Ed25519/X25519.
+	suite, err := profile.Suite(e.cfg.DefaultSuite)
+	if err != nil {
+		return nil, err
+	}
+	signer, err := e.signerFor(suite)
+	if err != nil {
+		return nil, err
+	}
 
 	// Seal sensitive modules (e.g. c8y enrollment tokens) per-device so the
 	// secret is opaque to everything other than the device itself: the signed
 	// bundle persisted in the audit log, any reverse proxy access log, and a
 	// BLE relay all see ciphertext only. Sealing requires the device to have
-	// presented an ephemeral X25519 key in its EnrollRequest; we refuse to
-	// issue a bundle that would leak a sensitive payload on the wire.
-	if err := e.sealSensitiveModules(req, mods); err != nil {
+	// presented an ephemeral key-agreement key in its EnrollRequest; we refuse
+	// to issue a bundle that would leak a sensitive payload on the wire.
+	if err := e.sealSensitiveModules(req, mods, suite); err != nil {
 		_ = e.cfg.Store.AppendAudit(ctx, store.AuditEntry{
 			Actor: "system", Action: "enroll.reject", DeviceID: req.DeviceID,
 			Details: "seal sensitive module: " + err.Error(),
@@ -326,11 +353,11 @@ func (e *Engine) issueBundle(ctx context.Context, req *protocol.EnrollRequest, r
 		ExpiresAt:       time.Now().UTC().Add(e.cfg.BundleTTL),
 		Modules:         mods,
 	}
-	env, err := protocol.Sign(bundle, e.cfg.SigningKey, e.cfg.SigningKeyID)
+	env, err := protocol.SignWithSuite(bundle, signer, e.cfg.SigningKeyID, suite)
 	if err != nil {
 		return nil, err
 	}
-	textEnv, err := protocol.SignTextManifest(&bundle, e.cfg.SigningKey, e.cfg.SigningKeyID)
+	textEnv, err := protocol.SignTextManifestWithSuite(&bundle, signer, e.cfg.SigningKeyID, suite)
 	if err != nil {
 		return nil, fmt.Errorf("sign text manifest: %w", err)
 	}
@@ -341,22 +368,40 @@ func (e *Engine) issueBundle(ctx context.Context, req *protocol.EnrollRequest, r
 		Bundle:          env,
 		TextManifest:    textEnv,
 		ServerTime:      &issuedAt,
+		WantsText:       req.WantsText(),
 	}
 	// If the device asked for whole-bundle encryption (e.g. transport is an
 	// untrusted BLE relay) we wrap the SignedEnvelope in an
 	// EncryptedPayload. Per-module sealing has already happened above; this
 	// is independent and additive.
-	if req.EncryptBundle && req.EphemeralX25519 != "" {
+	if ephemeral, ok := req.EphemeralKey(suite); req.EncryptBundle && ok {
 		envJSON, err := json.Marshal(env)
 		if err != nil {
 			return nil, fmt.Errorf("marshal envelope: %w", err)
 		}
-		enc, err := protocol.SealForDevice(req.EphemeralX25519, envJSON)
+		enc, err := protocol.SealForDeviceSuite(ephemeral, envJSON, suite)
 		if err != nil {
 			return nil, fmt.Errorf("seal bundle: %w", err)
 		}
 		resp.EncryptedBundle = enc
 		resp.Bundle = nil // when encryption is requested only encrypted form is returned
+	}
+
+	// A device with a fixed receive buffer tells us how much it can take. An
+	// oversized bundle is rejected with a reason it can log, rather than
+	// written out and truncated somewhere it cannot detect.
+	if err := checkResponseSize(req, resp); err != nil {
+		_ = e.cfg.Store.AppendAudit(ctx, store.AuditEntry{
+			Actor: "system", Action: "enroll.reject", DeviceID: req.DeviceID,
+			Details: err.Error(),
+		})
+		sizeNow := time.Now().UTC()
+		return &protocol.EnrollResponse{
+			ProtocolVersion: protocol.Version,
+			Status:          protocol.StatusRejected,
+			Reason:          err.Error(),
+			ServerTime:      &sizeNow,
+		}, nil
 	}
 	// Surface the device's advisory profile hint in the audit log so an
 	// operator can see when the device asked for one profile but server-side
@@ -384,6 +429,47 @@ func shortFingerprint(pubB64 string) string {
 	return hex.EncodeToString(sum[:6]) // 12 hex chars; enough for human comparison
 }
 
+// signerFor returns the signing key for a suite, or an error naming what the
+// deployment is missing.
+func (e *Engine) signerFor(suite protocol.Suite) (crypto.Signer, error) {
+	if suite == protocol.SuiteP256 {
+		if e.cfg.SigningKeyP256 == nil {
+			return nil, fmt.Errorf("profile requires the %s suite but the server has no P-256 signing key", suite)
+		}
+		return e.cfg.SigningKeyP256, nil
+	}
+	return e.cfg.SigningKey, nil
+}
+
+// checkResponseSize enforces the device's declared receive-buffer limit.
+//
+// The size measured is the JSON encoding for a normal response, or the text
+// manifest for a device that asked for one — in both cases the bytes that
+// transport will actually have to carry.
+func checkResponseSize(req *protocol.EnrollRequest, resp *protocol.EnrollResponse) error {
+	if req.MaxResponseBytes <= 0 {
+		return nil
+	}
+	var n int
+	if req.WantsText() && resp.TextManifest != nil {
+		b, err := json.Marshal(resp.TextManifest)
+		if err != nil {
+			return fmt.Errorf("measure text manifest: %w", err)
+		}
+		n = len(b)
+	} else {
+		b, err := json.Marshal(resp)
+		if err != nil {
+			return fmt.Errorf("measure response: %w", err)
+		}
+		n = len(b)
+	}
+	if n > req.MaxResponseBytes {
+		return fmt.Errorf("bundle is %d bytes but the device accepts at most %d", n, req.MaxResponseBytes)
+	}
+	return nil
+}
+
 // sealSensitiveModules walks the module list and replaces the plaintext
 // payload of any module flagged Sensitive with a SealedPayload addressed to
 // the device's ephemeral X25519 key. The plaintext is zeroed before return so
@@ -393,13 +479,19 @@ func shortFingerprint(pubB64 string) string {
 // is encountered without a device ephemeral key the function returns an error
 // and the engine rejects the enrollment — refusing to issue is safer than
 // leaking the secret in clear text.
-func (e *Engine) sealSensitiveModules(req *protocol.EnrollRequest, mods []protocol.Module) error {
+func (e *Engine) sealSensitiveModules(req *protocol.EnrollRequest, mods []protocol.Module, suite protocol.Suite) error {
 	for i := range mods {
 		if !mods[i].Sensitive {
 			continue
 		}
-		if req.EphemeralX25519 == "" {
-			return fmt.Errorf("module %s carries a sensitive payload but device did not provide ephemeral_x25519", mods[i].Type)
+		// Name the field this suite expects. A device that correctly sent
+		// ephemeral_p256 but landed on an Ed25519/X25519 profile (or the
+		// reverse) is a profile/device mismatch, and saying which field was
+		// missing is what makes that diagnosable.
+		ephemeral, ok := req.EphemeralKey(suite)
+		if !ok {
+			return fmt.Errorf("module %s carries a sensitive payload but device did not provide %s (profile suite %s)",
+				mods[i].Type, suite.EphemeralField(), suite)
 		}
 		var (
 			plaintext []byte
@@ -417,7 +509,7 @@ func (e *Engine) sealSensitiveModules(req *protocol.EnrollRequest, mods []protoc
 			plaintext = canon
 			format = "json"
 		}
-		sealed, err := protocol.SealModuleForDevice(req.EphemeralX25519, plaintext, format)
+		sealed, err := protocol.SealModuleForDeviceSuite(ephemeral, plaintext, format, suite)
 		if err != nil {
 			return fmt.Errorf("seal %s: %w", mods[i].Type, err)
 		}

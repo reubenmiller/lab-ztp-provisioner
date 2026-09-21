@@ -1,0 +1,50 @@
+# Profile for Zephyr microcontrollers (ESP32-class boards running the
+# thin-edge.io Zephyr firmware), provisioned over a BLE relay.
+#
+# What makes this profile different from default.yaml is the crypto suite.
+# Mbed TLS — and therefore the PSA crypto stack every Zephyr build uses — does
+# not implement Ed25519, and a board whose provisioning flash partition is
+# already nearly full cannot afford a second signature stack plus a second
+# curve. The "p256" suite uses NIST P-256 for both signatures and key
+# agreement, which these devices already carry for their own TLS.
+#
+# Devices on this profile:
+#   - sign their EnrollRequest with ecdsa-p256-sha256
+#   - send ephemeral_p256 (not ephemeral_x25519) for sealing
+#   - usually ask for response_format: "text" so they need no JSON parser
+#
+# The server generates and persists the matching P-256 bundle-signing key on
+# first start once any profile selects this suite; the public key is logged
+# and written to "<signing_key_file>.p256.pub" for pinning on devices.
+
+name: zephyr
+description: "Zephyr microcontrollers"
+priority: 0
+
+crypto:
+  suite: p256
+
+# Optional: match these devices automatically by the facts they report
+# instead of assigning the profile by hand. The Zephyr agent reports
+# os: "zephyr" and the board name as the model.
+#
+# selector:
+#   match_model: "^esp32"
+
+payload:
+  wifi:
+    networks:
+      # Seal real passwords with `just secrets-seal` — never commit them.
+      - ssid: iota
+        password: CHANGE-ME
+        key_mgmt: "WPA-PSK"
+
+  cumulocity:
+    # With an issuer configured the bundle carries a freshly minted,
+    # per-device enrollment token, sealed to the device's ephemeral key so
+    # the BLE relay never sees it. The device hands that token straight to
+    # its thin-edge.io client, which enrols over EST without an operator
+    # ever opening the Cumulocity UI.
+    issuer:
+      mode: local
+      credential_ref: c8y-tedge-eu-latest

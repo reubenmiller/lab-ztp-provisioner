@@ -205,7 +205,11 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	if resp.Status == protocol.StatusRejected {
 		status = http.StatusForbidden
 	}
-	if wantsTextPlain(r) {
+	// A device can ask for the text manifest either through HTTP content
+	// negotiation or, when it has no control over the HTTP request — a BLE
+	// relay POSTs on its behalf — through response_format in the signed
+	// request itself.
+	if resp.WantsText || wantsTextPlain(r) {
 		writeEnrollText(w, status, resp)
 		return
 	}
