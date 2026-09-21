@@ -17,8 +17,9 @@ import (
 //	reason=...            (optional)
 //	retry_after=<secs>    (optional)
 //	server_time=<RFC3339> (optional)
-//	bundle.alg=... / bundle.key_id=... / bundle.payload=... / bundle.signature=...
 //	manifest.alg=... / manifest.key_id=... / manifest.payload=... / manifest.signature=...
+//	bundle.alg=... / bundle.key_id=... / bundle.payload=... / bundle.signature=...
+//	                      (only when there is no manifest)
 //	encrypted.alg=... / encrypted.server_key=... / encrypted.nonce=... / encrypted.ciphertext=...
 //
 // Readers must ignore keys they do not know, so records can be added.
@@ -44,7 +45,12 @@ func MarshalEnrollText(resp *EnrollResponse) []byte {
 	if resp.ServerTime != nil {
 		writeKV(&buf, "server_time", resp.ServerTime.UTC().Format("2006-01-02T15:04:05Z"))
 	}
-	if resp.Bundle != nil {
+	// A text reader has no JSON parser, so the bundle — base64 of a JSON
+	// ProvisioningBundle — is of no use to it once the same bundle is here
+	// as a manifest; it only makes the response about twice as long, which
+	// matters to a BLE device reading it through a 4 KB buffer. It stays
+	// for a response that has no manifest.
+	if resp.Bundle != nil && resp.TextManifest == nil {
 		buf.Write(MarshalEnvelopeText("bundle", resp.Bundle))
 	}
 	if resp.TextManifest != nil {
