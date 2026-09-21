@@ -116,6 +116,13 @@ struct Cli {
     #[arg(long, default_value = "ed25519-x25519")]
     crypto_suite: String,
 
+    /// Testing only: "text" asks the server for the line-based response a
+    /// constrained device parses (response_format in the signed request)
+    /// instead of JSON. Lets the BLE-relay + text + p256 path a Zephyr
+    /// device uses be exercised from Linux. Values: json (default), text.
+    #[arg(long, default_value = "json", hide = true)]
+    response_format: String,
+
     /// Ordered comma-separated list of enrollment transports to attempt.
     /// Each transport is tried in order; the first successful enrollment wins.
     /// Tokens: http, ble, auto
@@ -507,6 +514,12 @@ fn run(
         .parse()
         .map_err(|e| format!("invalid --crypto-suite: {e}"))?;
 
+    let text_response = match cli.response_format.as_str() {
+        "" | "json" => false,
+        "text" => true,
+        other => return Err(format!("invalid --response-format {other:?} (want json or text)").into()),
+    };
+
     // --- transport list and HTTP candidate collection ----------------------
     let mut server_pubkey = cli.server_pubkey.clone();
     let transports = build_transport_list(&cli.transport)?;
@@ -568,6 +581,7 @@ fn run(
         dispatcher,
         agent_version: env!("CARGO_PKG_VERSION").to_string(),
         encrypt: cli.encrypt,
+        text_response,
         pending_poll: Duration::from_secs(10),
         max_attempts: 0,
         max_network_failures: 3,
@@ -1202,6 +1216,7 @@ mod tests {
             dispatcher,
             agent_version: "test".to_string(),
             encrypt: false,
+            text_response: false,
             pending_poll: Duration::from_millis(10),
             max_attempts: 0,
             max_network_failures: 1,

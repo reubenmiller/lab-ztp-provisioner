@@ -384,20 +384,29 @@ func (e *Engine) issueBundle(ctx context.Context, req *protocol.EnrollRequest, r
 		WantsText:       req.WantsText(),
 	}
 	// If the device asked for whole-bundle encryption (e.g. transport is an
-	// untrusted BLE relay) we wrap the SignedEnvelope in an
-	// EncryptedPayload. Per-module sealing has already happened above; this
-	// is independent and additive.
+	// untrusted BLE relay) we wrap the signed bundle in an EncryptedPayload.
+	// Per-module sealing has already happened above; this is independent
+	// and additive.
 	if ephemeral, ok := req.EphemeralKey(suite); req.EncryptBundle && ok {
-		envJSON, err := json.Marshal(env)
-		if err != nil {
+		// Encrypt the rendering the device will parse: the manifest.*
+		// records for a text-format device, so it needs no JSON parser
+		// after decrypting either, otherwise the JSON envelope.
+		var plaintext []byte
+		if req.WantsText() {
+			plaintext = protocol.MarshalEnvelopeText("manifest", textEnv)
+		} else if plaintext, err = json.Marshal(env); err != nil {
 			return nil, fmt.Errorf("marshal envelope: %w", err)
 		}
-		enc, err := protocol.SealForDeviceSuite(ephemeral, envJSON, suite)
+		enc, err := protocol.SealForDeviceSuite(ephemeral, plaintext, suite)
 		if err != nil {
 			return nil, fmt.Errorf("seal bundle: %w", err)
 		}
 		resp.EncryptedBundle = enc
-		resp.Bundle = nil // when encryption is requested only encrypted form is returned
+		// Only the encrypted form is returned. Both plaintext renderings
+		// must go: the text manifest would otherwise be written next to
+		// the ciphertext by a text-format response.
+		resp.Bundle = nil
+		resp.TextManifest = nil
 	}
 
 	// A device with a fixed receive buffer tells us how much it can take. An
@@ -456,20 +465,16 @@ func (e *Engine) signerFor(suite protocol.Suite) (crypto.Signer, error) {
 
 // checkResponseSize enforces the device's declared receive-buffer limit.
 //
-// The size measured is the JSON encoding for a normal response, or the text
-// manifest for a device that asked for one — in both cases the bytes that
-// transport will actually have to carry.
+// The size measured is the rendering the device asked for — the JSON
+// EnrollResponse or its text form — i.e. the bytes the transport will
+// actually have to carry.
 func checkResponseSize(req *protocol.EnrollRequest, resp *protocol.EnrollResponse) error {
 	if req.MaxResponseBytes <= 0 {
 		return nil
 	}
 	var n int
-	if req.WantsText() && resp.TextManifest != nil {
-		b, err := json.Marshal(resp.TextManifest)
-		if err != nil {
-			return fmt.Errorf("measure text manifest: %w", err)
-		}
-		n = len(b)
+	if req.WantsText() {
+		n = len(protocol.MarshalEnrollText(resp))
 	} else {
 		b, err := json.Marshal(resp)
 		if err != nil {

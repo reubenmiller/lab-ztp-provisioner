@@ -18,6 +18,7 @@ use crate::encrypt;
 use crate::identity::Identity;
 use crate::sign;
 use crate::suite::Suite;
+use crate::textmanifest;
 use crate::transport;
 use crate::wire::{
     EnrollRequest, EnrollResponse, EnrollStatus, ProvisioningBundle, VERSION,
@@ -82,6 +83,10 @@ pub struct Config {
     pub dispatcher: Dispatcher,
     pub agent_version: String,
     pub encrypt: bool,
+    /// Ask the server for the text rendering (`response_format: "text"`)
+    /// instead of JSON. The Rust agent has no need for it; it exists so the
+    /// path a constrained device uses can be exercised from a Linux box.
+    pub text_response: bool,
     /// How long to wait between retries when the server says "pending".
     /// Default: 10 s.
     pub pending_poll: Duration,
@@ -223,7 +228,9 @@ pub(crate) fn handle_accepted(
     cfg: &Config,
     _device_id: &str,
 ) -> crate::Result<()> {
-    // If the server encrypted the entire bundle, decrypt it first.
+    // If the server encrypted the entire bundle, decrypt it first. For a
+    // text-format request the plaintext is the manifest.* records rather
+    // than a JSON envelope.
     let signed_env = if let Some(enc) = resp.encrypted_bundle {
         if !cfg.encrypt {
             return Err(
@@ -231,8 +238,16 @@ pub(crate) fn handle_accepted(
             );
         }
         let plain = encrypt::open_for_device(eph_priv, &enc)?;
-        serde_json::from_slice(&plain)
-            .map_err(|e| format!("decode encrypted envelope: {e}"))?
+        if cfg.text_response {
+            let text = String::from_utf8(plain).map_err(|e| format!("decode encrypted manifest: {e}"))?;
+            textmanifest::manifest_envelope_from_text(&text)?
+        } else {
+            serde_json::from_slice(&plain)
+                .map_err(|e| format!("decode encrypted envelope: {e}"))?
+        }
+    } else if cfg.text_response {
+        resp.text_manifest
+            .ok_or("server returned accepted with no text manifest")?
     } else {
         resp.bundle
             .ok_or("server returned accepted with no bundle")?
@@ -243,8 +258,11 @@ pub(crate) fn handle_accepted(
         Some(key) => sign::verify(&signed_env, key)?,
         None => sign::decode_payload_unverified(&signed_env)?,
     };
-    let mut bundle: ProvisioningBundle =
-        serde_json::from_slice(&payload_bytes).map_err(|e| format!("decode bundle: {e}"))?;
+    let mut bundle: ProvisioningBundle = if cfg.text_response {
+        textmanifest::parse_manifest(&payload_bytes, eph_priv.suite())?
+    } else {
+        serde_json::from_slice(&payload_bytes).map_err(|e| format!("decode bundle: {e}"))?
+    };
 
     // The bundle's issued_at field is inside the signed payload, so it
     // carries the same trust as the rest of the bundle. Apply it to the
@@ -348,7 +366,7 @@ pub(crate) fn build_request(device_id: &str, cfg: &Config, eph: &encrypt::Epheme
         ephemeral_x25519,
         encrypt_bundle: cfg.encrypt,
         ephemeral_p256,
-        response_format: None,
+        response_format: cfg.text_response.then(|| "text".to_string()),
         max_response_bytes: None,
         bootstrap_token: cfg.bootstrap_token.clone(),
         facts: crate::facts::collect(&cfg.agent_version),
@@ -489,6 +507,7 @@ mod system_clock_tests {
             dispatcher: appliers::Dispatcher::new(tmp.path().join("appliers")),
             agent_version: "test".to_string(),
             encrypt: false,
+            text_response: false,
             pending_poll: Duration::from_millis(10),
             max_attempts: 1,
             max_network_failures: 1,
@@ -526,6 +545,7 @@ mod system_clock_tests {
             bundle: Some(signed),
             encrypted_bundle: None,
             server_time: None,
+            text_manifest: None,
         };
         let eph = encrypt::EphemeralKey::generate(cfg.identity.suite()).expect("eph keypair");
         handle_accepted(resp, &eph, cfg.server_pub_key.as_ref(), cfg, "dev-clock-test")

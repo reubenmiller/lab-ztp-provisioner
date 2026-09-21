@@ -127,20 +127,29 @@ pub fn post_enroll(
 ) -> crate::Result<EnrollResponse> {
     let url = format!("{server_url}/v1/enroll");
     let body = serde_json::to_string(env)?;
-    let resp = agent
+    let result = agent
         .post(&url)
         .set("Content-Type", "application/json")
-        .send_string(&body)
-        .map_err(|e| format!("POST {url}: {e}"))?;
+        .send_string(&body);
 
-    let status = resp.status();
-    let text = resp.into_string()?;
+    let (status, text) = match result {
+        Ok(resp) => (resp.status(), resp.into_string()?),
+        // The server answers a rejection with 403 and malformed input with
+        // 400, both with an EnrollResponse body carrying the reason (and
+        // server_time for clock-skew correction). ureq 2 reports any 4xx/5xx
+        // as an error, so recover the body instead of treating it as a
+        // network failure.
+        Err(ureq::Error::Status(code, resp)) => (code, resp.into_string()?),
+        Err(e) => return Err(format!("POST {url}: {e}").into()),
+    };
 
     if status >= 500 {
         return Err(format!("server error {status}: {text}").into());
     }
 
-    serde_json::from_str(&text).map_err(|e| format!("decode enroll response: {e}").into())
+    // JSON, or the text rendering when the request set response_format.
+    crate::textmanifest::decode_enroll_response(text.as_bytes())
+        .map_err(|e| format!("POST {url}: HTTP {status}: {e}").into())
 }
 
 /// TCP-probe a server URL (3-second timeout), returning true if connectable.

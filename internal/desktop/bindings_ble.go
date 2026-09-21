@@ -17,6 +17,7 @@ import (
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/thin-edge/tedge-zerotouch-provisioning/internal/transport/ble"
+	"github.com/thin-edge/tedge-zerotouch-provisioning/pkg/protocol"
 )
 
 // bleProgressEvent is the Wails event name the SPA listens for to
@@ -232,16 +233,11 @@ func waitForApproval(ctx context.Context, c *http.Client, statusURL, enrollURL, 
 		}
 		body, _ := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
-		var parsed struct {
-			Status     string `json:"status"`
-			Reason     string `json:"reason"`
-			RetryAfter int    `json:"retry_after"`
+		pollStatus, pollReason, retryAfter := protocol.ParseEnrollStatus(body)
+		if retryAfter > 0 {
+			interval = time.Duration(retryAfter) * time.Second
 		}
-		_ = json.Unmarshal(body, &parsed)
-		if parsed.RetryAfter > 0 {
-			interval = time.Duration(parsed.RetryAfter) * time.Second
-		}
-		switch parsed.Status {
+		switch pollStatus {
 		case "accepted":
 			// Re-POST the original envelope; the nonce was forgotten
 			// when the request was queued for approval, so this goes
@@ -256,11 +252,11 @@ func waitForApproval(ctx context.Context, c *http.Client, statusURL, enrollURL, 
 			}
 			return bundle, status2, reason2, nil
 		case "rejected":
-			return nil, "rejected", parsed.Reason, nil
+			return nil, "rejected", pollReason, nil
 		case "pending":
 			// continue polling
 		default:
-			progress("pending", "unexpected status from server: "+parsed.Status)
+			progress("pending", "unexpected status from server: "+pollStatus)
 		}
 	}
 }
@@ -284,19 +280,16 @@ func submitEnroll(ctx context.Context, c *http.Client, url string, envelope []by
 		return nil, "", "", fmt.Errorf("read body: %w", err)
 	}
 	// 200=accepted, 202=pending, 403=rejected — the body still parses
-	// either way (it's an EnrollResponse JSON). Hand body back as the
-	// "bundle" only when we'll actually write it; for pending/rejected
-	// the caller short-circuits.
-	var parsed struct {
-		Status string `json:"status"`
-		Reason string `json:"reason"`
-	}
-	_ = json.Unmarshal(body, &parsed)
-	if parsed.Status == "" {
+	// either way. It is JSON, or the text form when the device asked for
+	// response_format "text"; the device chose, so the relay reads both.
+	// Hand body back as the "bundle" only when we'll actually write it; for
+	// pending/rejected the caller short-circuits.
+	status, reason, _ := protocol.ParseEnrollStatus(body)
+	if status == "" {
 		// Server didn't speak the protocol — surface as a hard error.
 		return nil, "", "", fmt.Errorf("/v1/enroll: %s: %s", resp.Status, string(body))
 	}
-	return body, parsed.Status, parsed.Reason, nil
+	return body, status, reason, nil
 }
 
 // extractDeviceFields peeks at the envelope's signed payload to pull

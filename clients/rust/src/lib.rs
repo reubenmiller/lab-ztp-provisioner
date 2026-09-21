@@ -15,6 +15,7 @@ pub mod logging;
 pub mod mdns;
 pub mod sign;
 pub mod suite;
+pub mod textmanifest;
 pub mod transport;
 pub mod wire;
 

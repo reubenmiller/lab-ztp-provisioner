@@ -375,15 +375,17 @@ mod imp {
                                 log::info!("BLE phase 2: received server response, applying bundle");
                                 // Deserialise first so we can detect rejection and retry
                                 // without dying, rather than returning a hard error.
-                                let resp_result: Result<crate::wire::EnrollResponse, _> =
-                                    serde_json::from_slice(&req);
+                                // JSON, or the text rendering when the request
+                                // set response_format: the relay forwards the
+                                // server's body verbatim.
+                                let resp_result = crate::textmanifest::decode_enroll_response(&req);
                                 match resp_result {
                                     Err(e) => {
                                         log::error!("BLE phase 2: decode server response: {e}");
                                         if let Some(sw) = stat_writer.as_mut() {
                                             sw.write_all(&[STATUS_ERROR]).await.ok();
                                         }
-                                        return Err(format!("decode server response JSON: {e}").into());
+                                        return Err(format!("decode server response: {e}").into());
                                     }
                                     Ok(ref resp)
                                         if matches!(

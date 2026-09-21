@@ -349,3 +349,108 @@ func TestEnroll_TextResponseFormat(t *testing.T) {
 		t.Errorf("manifest lacks a sealed c8y line:\n%s", body)
 	}
 }
+
+// TestEnroll_TextResponseEncrypted covers a text-format device that asked for
+// whole-bundle encryption, as a Zephyr device behind a BLE relay does. The
+// relay must see neither rendering of the bundle in the clear, and what the
+// device decrypts must be the manifest.* records it already knows how to parse.
+func TestEnroll_TextResponseEncrypted(t *testing.T) {
+	st := store.NewMemory()
+	ctx := context.Background()
+	if err := st.AddAllowlist(ctx, store.AllowlistEntry{DeviceID: "dev-text-enc"}); err != nil {
+		t.Fatal(err)
+	}
+	e := p256Engine(t, st, payload.Registry{&payload.SSH{Keys: []string{"ssh-ed25519 AAAA relay-must-not-see"}}},
+		trust.Chain{&trust.Allowlist{Store: st}})
+
+	env, ephPriv := p256DeviceEnvelope(t, protocol.EnrollRequest{
+		DeviceID:       "dev-text-enc",
+		ResponseFormat: "text",
+		EncryptBundle:  true,
+	})
+	resp, err := e.Enroll(ctx, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Status != protocol.StatusAccepted {
+		t.Fatalf("status = %s (%s)", resp.Status, resp.Reason)
+	}
+
+	wire := string(protocol.MarshalEnrollText(resp))
+	for _, leak := range []string{"manifest.", "bundle."} {
+		if strings.Contains(wire, leak) {
+			t.Errorf("encrypted text response carries plaintext %s records:\n%s", leak, wire)
+		}
+	}
+	if !strings.Contains(wire, "encrypted.alg="+protocol.AlgP256ChaCha20+"\n") {
+		t.Errorf("no encrypted.* records:\n%s", wire)
+	}
+	if !strings.Contains(wire, "server_time=") {
+		t.Errorf("no server_time record:\n%s", wire)
+	}
+
+	plain, err := protocol.OpenForDeviceP256(ephPriv, resp.EncryptedBundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(plain)), "\n") {
+		k, v, _ := strings.Cut(line, "=")
+		fields[k] = v
+	}
+	man := &protocol.SignedEnvelope{
+		ProtocolVersion: protocol.Version,
+		KeyID:           fields["manifest.key_id"],
+		Algorithm:       fields["manifest.alg"],
+		Payload:         fields["manifest.payload"],
+		Signature:       fields["manifest.signature"],
+	}
+	pub, err := protocol.DecodePublicKeyForAlg(e.PublicKeyP256(), protocol.AlgECDSAP256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := protocol.Verify(man, pub)
+	if err != nil {
+		t.Fatalf("decrypted manifest does not verify: %v\n%s", err, plain)
+	}
+	if !strings.Contains(string(body), "module=ssh.authorized_keys.v2 ") {
+		t.Errorf("manifest lacks the ssh module:\n%s", body)
+	}
+}
+
+// TestEnroll_MaxResponseBytesText checks the limit is measured against the
+// text rendering a text-format device will actually receive.
+func TestEnroll_MaxResponseBytesText(t *testing.T) {
+	st := store.NewMemory()
+	ctx := context.Background()
+	for _, id := range []string{"dev-fits", "dev-too-big"} {
+		if err := st.AddAllowlist(ctx, store.AllowlistEntry{DeviceID: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e := p256Engine(t, st, payload.Registry{&payload.SSH{Keys: []string{"ssh-ed25519 AAAA k"}}},
+		trust.Chain{&trust.Allowlist{Store: st}})
+
+	// Learn the real size from an unbounded request, then ask again with
+	// exactly that limit (accepted) and one byte less (rejected).
+	env, _ := p256DeviceEnvelope(t, protocol.EnrollRequest{DeviceID: "dev-fits", ResponseFormat: "text"})
+	resp, err := e.Enroll(ctx, env)
+	if err != nil || resp.Status != protocol.StatusAccepted {
+		t.Fatalf("unbounded enroll: %v %+v", err, resp)
+	}
+	size := len(protocol.MarshalEnrollText(resp))
+	if resp.TextManifest == nil || size == 0 {
+		t.Fatal("no text rendering")
+	}
+
+	env, _ = p256DeviceEnvelope(t, protocol.EnrollRequest{
+		DeviceID: "dev-too-big", ResponseFormat: "text", MaxResponseBytes: size / 2,
+	})
+	resp, err = e.Enroll(ctx, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Status != protocol.StatusRejected || !strings.Contains(resp.Reason, "accepts at most") {
+		t.Fatalf("status = %s reason = %q, want size rejection", resp.Status, resp.Reason)
+	}
+}

@@ -133,6 +133,11 @@ pub struct EnrollResponse {
     /// synced can compute a correction offset from this field and retry.
     #[serde(default, skip_serializing_if = "Option::is_none", with = "opt_rfc3339_z")]
     pub server_time: Option<DateTime<Utc>>,
+
+    /// The signed line-based manifest (`manifest.*` records). Only present
+    /// in the text rendering; never part of the JSON form.
+    #[serde(skip)]
+    pub text_manifest: Option<SignedEnvelope>,
 }
 
 // ---- ProvisioningBundle -----------------------------------------------------
